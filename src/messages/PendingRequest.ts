@@ -44,27 +44,33 @@ export class PendingRequest implements Promise<ReadonlyArray<Message>> {
                 if (request._id === undefined) {
                     throw new Error(`Cannot build a pending request without id`);
                 }
-                const promise = new CompletablePromise<ReadonlyArray<Message>>();
+                request._promise = new CompletablePromise<Message[]>();
                 if (request._pendingEndpointIds.size < 1 && request._neededResponses < 1) {
-                    promise.resolve(EMPTY_ARRAY);
+                    request._promise.resolve([]);
                 } else if (0 < request._timeoutInMs) {
-                    request._timer = setTimeout(() => {
+                    const process = () => {
                         if (request._timer === undefined) {
                             return;
                         }
                         request._timer = undefined;
-                        if (promise.state !== CompletablePromiseState.PENDING) {
+                        if (request._promise!.state !== CompletablePromiseState.PENDING) {
+                            return;
+                        }
+                        if (request._postponeTimeout) {
+                            request._postponeTimeout = false;
+                            request._timer = setTimeout(process, request._timeoutInMs);
                             return;
                         }
                         request._timedOut = true;
                         if (request._throwTimeoutException) {
-                            promise.reject(new Error(`Timeout occurred at pending promise ` + request));
+                            request._promise!.reject(new Error(`Timeout occurred at pending promise ` + request));
                         } else {
                             logger.warn(`Pending request is timed out and resolved with missing responses. ${this.toString()}`);
                             const response = Array.from(request._responses.values());
-                            promise.resolve(response);
+                            request._promise!.resolve(response);
                         }
-                    }, request._timeoutInMs);
+                    };
+                    request._timer = setTimeout(process, request._timeoutInMs);
                 }
                 return request;
             },
@@ -73,6 +79,7 @@ export class PendingRequest implements Promise<ReadonlyArray<Message>> {
     }
 
     private _id?: string;
+    private _postponeTimeout = false;
     private _timedOut = false;
     private _timeoutInMs = 0;
     private _receivedResponses = 0;
@@ -104,28 +111,33 @@ export class PendingRequest implements Promise<ReadonlyArray<Message>> {
 
     public accept(message: Message): void {
         if (message.sourceId === undefined || message.requestId === undefined) {
-            logger.warn(`No source or request id is assigned for message: ${message}`);
+            logger.warn(`No source or request id is assigned for message:`, message);
             return;
         }
         let completed = false;
         try {
-            const pendingBefore = this._pendingEndpointIds.size;
-            if (!this._pendingEndpointIds.delete(message.sourceId) && this._neededResponses < 1) {
-                logger.debug(`Source endpoint ${message.sourceId} is not found 
-                    in pending ids of request ${message.requestId}`
-                );
-                completed = pendingBefore == 0;
-                return;
+            let noMoreNeededResponse = true;
+            if (0 < this._neededResponses) {
+                ++this._receivedResponses;
+                noMoreNeededResponse = this._neededResponses <= this._receivedResponses;
             }
-            const pendingAfter = this._pendingEndpointIds.size;
+            
+            let noMorePendingEndpoints = true;
+            if (0 < this._pendingEndpointIds.size) {
+                if (!this._pendingEndpointIds.delete(message.sourceId)) {
+                    logger.debug(`Source endpoint ${message.sourceId} is not found 
+                        in pending ids of request ${message.requestId}`
+                    );
+                }
+                noMorePendingEndpoints = this._pendingEndpointIds.size < 1
+            }
+            
             const prevResponse = this._responses.get(message.sourceId);
             if (prevResponse) {
                 logger.warn(`Remote endpoint ${message.sourceId} overrided its previous response for request ${this.id}. removed response`, message);
             }
             this._responses.set(message.sourceId, message);
-            ++this._receivedResponses;
-            logger.trace(`Id: ${this.id}, pending before:`)
-            completed = (pendingBefore == 1 && pendingAfter == 0) || (0 < this._neededResponses && this._receivedResponses <= this._neededResponses);
+            completed = noMoreNeededResponse && noMorePendingEndpoints;
         } finally {
             if (completed) {
                 this._resolve();
@@ -141,6 +153,11 @@ export class PendingRequest implements Promise<ReadonlyArray<Message>> {
         if (this._pendingEndpointIds.size < 1 && this._neededResponses < 0) {
             this._resolve();
         }
+    }
+
+    public postponeTimeout(): void {
+        this._postponeTimeout = true;
+        logger.debug(`Pending Request ${this} is postponed`);
     }
 
     public addPendingEndpointId(endpointId: string): void {

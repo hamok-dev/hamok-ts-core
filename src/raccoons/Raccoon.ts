@@ -10,7 +10,7 @@ import { LogEntry } from "./LogEntry";
 import { RaccoonDispatcher } from "./RaccoonDispatcher";
 import { RaccoonState, RaftState } from "./RaccoonState";
 import { RaftLogs } from "./RaftLogs";
-import { RemotePeer, RemotePeers } from "./RemotePeers";
+import { RemotePeers } from "./RemotePeers";
 import { SyncedProperties } from "./SyncedProperties";
 import { v4 as uuid } from "uuid";
 
@@ -23,21 +23,20 @@ const CHANGED_LEADER_ID_EVENT_NAME = "changedLeaderId";
 const COMMITTED_ENTRY_EVENT_NAME = "committedEntry";
 const STORAGE_SYNC_REQUESTED_EVENT_NAME = "storageSyncRequested";
 
-export type CommittedEntryEvent = {
-
-}
-
 export type ChangedLeaderEvent = {
-
+    prevLeaderId?: string,
+    actualLeaderId?: string,
 }
 
-export type StorageSyncRequestedListener = (completablePromise: CompletablePromise) => void;
+export type StorageSyncRequestedListener = (completablePromise: CompletablePromise<void>) => void;
 export type CommittedEntryListener = (message: Message) => void;
 export type ChangedLeaderListener = (event: ChangedLeaderEvent) => void;
 export type EndpointIdListener = (remoteEndpointId: string) => void;
 export type DetachedRemoteEndpointListener = (remoteEndpointId: string) => void;
 
 export interface Raccoon {
+    readonly started: boolean;
+    readonly logs: RaftLogs;
     readonly localPeerId: string;
     remoteEndpointIds: ReadonlySet<string>;
     commitIndex: number;
@@ -258,6 +257,10 @@ export class RaccoonImpl implements Raccoon {
         return this;
     }
 
+    public get logs(): RaftLogs {
+        return this._logs;
+    }
+
     public get state(): RaftState {
         return this._state?.state ?? RaftState.NONE;
     }
@@ -285,6 +288,10 @@ export class RaccoonImpl implements Raccoon {
         }
         this._logs.reset(value);
         logger.info(`Logs are restarted to point to the application defined commit index ${this.commitIndex}. Every logs are purged`);
+    }
+
+    public get started(): boolean {
+        return this._timer !== undefined;
     }
 
     public start(): void {
@@ -369,8 +376,13 @@ export class RaccoonImpl implements Raccoon {
                 if (raccoon._actualLeaderId === value) {
                     return;
                 }
+                const prevLeaderId = raccoon._actualLeaderId;
                 raccoon._actualLeaderId = value;
-                raccoon._emitter.emit(CHANGED_LEADER_ID_EVENT_NAME, value);
+                const event: ChangedLeaderEvent = {
+                    prevLeaderId,
+                    actualLeaderId: value
+                };
+                raccoon._emitter.emit(CHANGED_LEADER_ID_EVENT_NAME, event);
             }
             commit(message: Message): void {
                 raccoon._emitter.emit(COMMITTED_ENTRY_EVENT_NAME, message);

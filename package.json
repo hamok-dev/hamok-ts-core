@@ -1,7 +1,7 @@
 {
-  "name": "@hamok-dev/hamok-ts-core",
+  "name": "@hamok-dev/hamok-js-core",
   "version": "1.0.0-beta",
-  "description": "Distributed In-Memory Object Storage for Javascript",
+  "description": "Distributed Object Storage for NodeJS",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "engines": {

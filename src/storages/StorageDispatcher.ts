@@ -30,7 +30,7 @@ import {
 } from "@hamok-dev/common"
 import { GetSizeRequest, GetSizeResponse } from "@hamok-dev/common/lib/messagetypes/GetSize";
 import { EventEmitter } from "ws";
-import { ResponseChunker, ResponseChunkerImpl } from "../messages/ResponseChunker";
+import { ResponseChunker, StorageComlinkResponseChunkerImpl } from "../messages/ResponseChunker";
 
 const logger = createLogger("StorageDispatcher");
 
@@ -217,7 +217,7 @@ export class StorageDispatcher<K, V> implements StorageInboundEvents<K, V>, Stor
         responseChunker?: ResponseChunker
     ) {
         this._codec = codec;
-        this._responseChunker = responseChunker ?? ResponseChunkerImpl.createPassiveChunker();
+        this._responseChunker = responseChunker ?? StorageComlinkResponseChunkerImpl.createPassiveChunker();
         this._dispatcher = this._createMessageDispatcher();
     }
 
@@ -861,7 +861,7 @@ export class StorageDispatcher<K, V> implements StorageInboundEvents<K, V>, Stor
             }
             protected processEvictEntriesNotification(message: Message): void {
                 try {
-                    const notification = codec.decodeEvictNotification(message);
+                    const notification = codec.decodeEvictEntriesNotification(message);
                     emitter.emit(EVICT_ENTRIES_NOTIFICATION, notification);
                 } catch (err) {
                     logger.warn("dispatcher::processEvictEntriesNotification(): Error occurred while decoding message", err)

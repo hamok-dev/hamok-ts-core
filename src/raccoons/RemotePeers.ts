@@ -44,6 +44,7 @@ export class RemotePeers {
 
     public join(remotePeerId: string): void {
         if (this._activeRemotePeerIds.has(remotePeerId)) {
+            logger.warn(`Attempted to join remote peer  ${remotePeerId} twice`);
             return;
         }
         const remotePeer: RemotePeer = {
@@ -58,14 +59,14 @@ export class RemotePeers {
     public touch(remotePeerId: string) {
         var remotePeer = this._remotePeers.get(remotePeerId);
         if (remotePeer === undefined) {
-            this.join(remotePeerId);
+            logger.warn(`Unknown remote peer ${remotePeerId} is attempted to be retrieved`)
+            // this.join(remotePeerId);
             return;
         }
         this._remotePeers.set(remotePeerId, {
             id: remotePeerId,
             touched: Date.now(),
         });
-        this._changed = Date.now();
     }
 
     public onRemoteEndpointJoined(listener: RemoteEndpointStateChangedListener): this {

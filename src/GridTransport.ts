@@ -26,6 +26,7 @@ export type MessageBytesListener = (bytes: Uint8Array) => void;
 export interface GridTransport {
     readonly receiver: MessageBytesListener;
     sender: MessageBytesListener;
+    send(message: Message): void;
     // sender(listener: MessageBytesListener): void;
 }
 
@@ -77,5 +78,5 @@ export abstract class GridTransportAbstract implements GridTransport {
         }
     }
 
-    protected abstract receive(message: Message): void;
+    public abstract receive(message: Message): void;
 }

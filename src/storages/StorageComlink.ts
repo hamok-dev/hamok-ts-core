@@ -29,18 +29,24 @@ import {
     DeleteEntriesResponse,
     StorageCodec,
     MessageDefaultProcessor,
+    OngoingRequestsNotification,
     GetSizeResponse,
 } from "@hamok-dev/common"
 import { PendingRequest } from "../messages/PendingRequest";
 import { v4 as uuid } from "uuid";
-import { HamokGrid } from "../HamokGrid";
+import { HamokGrid, StorageSyncResult } from "../HamokGrid";
 import { PendingResponse } from "../messages/PendingResponse";
 import { ResponseChunker } from "../messages/ResponseChunker";
 import { EventEmitter } from "ws";
 import { RemoteEndpointStateChangedListener } from "../raccoons/RemotePeers";
+import { CompletablePromise } from "../utils/CompletablePromise";
+import { OngoingRequestIds } from "./OngoingRequestIds";
+import { MessageEmitter } from "../messages/MessageEmitter";
 
 const logger = createLogger("StorageComlink");
 
+const STORAGE_SYNC_REQUESTED_EVENT_NAME = "StorageSyncRequested";
+const CHANGED_LEADER_ID_EVENT_NAME = "ChangedLeaderId";
 const CLEAR_ENTRIES_REQUEST = MessageType.CLEAR_ENTRIES_REQUEST.toString();
 const CLEAR_ENTRIES_NOTIFICATION = MessageType.CLEAR_ENTRIES_NOTIFICATION.toString();
 const GET_ENTRIES_REQUEST = MessageType.GET_ENTRIES_REQUEST.toString();
@@ -57,56 +63,212 @@ const INSERT_ENTRIES_NOTIFICATION = MessageType.INSERT_ENTRIES_NOTIFICATION.toSt
 const UPDATE_ENTRIES_REQUEST = MessageType.UPDATE_ENTRIES_REQUEST.toString();
 const UPDATE_ENTRIES_NOTIFICATION = MessageType.UPDATE_ENTRIES_NOTIFICATION.toString();
 
+export type ChangedLeaderIdListener = (newLeaderId?: string) => void;
+export type StorageSyncRequestedListener = (request: CompletablePromise<StorageSyncResult>) => Promise<void>;
+export type ClearEntriesRequestListener = (request: ClearEntriesRequest) => Promise<void>;
+export type ClearEntriesNotificationListener = (notification: ClearEntriesNotification) => Promise<void>;
+export type GetEntriesRequestListener<K> = (response: GetEntriesRequest<K>) => Promise<void>;
+export type GetKeysRequestListener = (response: GetKeysRequest) => Promise<void>;
+export type GetSizeRequestListener = (response: GetSizeRequest) => Promise<void>;
+export type DeleteEntriesRequestListener<K> = (request: DeleteEntriesRequest<K>) => Promise<void>;
+export type DeleteEntriesNotificationListener<K> = (notification: DeleteEntriesNotification<K>) => Promise<void>;
+export type RemoveEntriesRequestListener<K> = (request: RemoveEntriesRequest<K>) => Promise<void>;
+export type RemoveEntriesNotificationListener<K> = (notification: RemoveEntriesNotification<K>) => Promise<void>;
+export type EvictEntriesRequestListener<K> = (request: EvictEntriesRequest<K>) => Promise<void>;
+export type EvictEntriesNotificationListener<K> = (notification: EvictEntriesNotification<K>) => Promise<void>;
+export type InsertEntriesRequestListener<K, V> = (request: InsertEntriesRequest<K, V>) => Promise<void>;
+export type InsertEntriesNotificationListener<K, V> = (notification: InsertEntriesNotification<K, V>) => Promise<void>;
+export type UpdateEntriesRequestListener<K, V> = (request: UpdateEntriesRequest<K, V>) => Promise<void>;
+export type UpdateEntriesNotificationListener<K, V> = (notification: UpdateEntriesNotification<K, V>) => Promise<void>;
 
-export type ClearEntriesRequestListener = (request: ClearEntriesRequest) => void;
-export type ClearEntriesNotificationListener = (notification: ClearEntriesNotification) => void;
-export type GetEntriesRequestListener<K> = (response: GetEntriesRequest<K>) => void;
-export type GetKeysRequestListener = (response: GetKeysRequest) => void;
-export type GetSizeRequestListener = (response: GetSizeRequest) => void;
-export type DeleteEntriesRequestListener<K> = (request: DeleteEntriesRequest<K>) => void;
-export type DeleteEntriesNotificationListener<K> = (notification: DeleteEntriesNotification<K>) => void;
-export type RemoveEntriesRequestListener<K> = (request: RemoveEntriesRequest<K>) => void;
-export type RemoveEntriesNotificationListener<K> = (notification: RemoveEntriesNotification<K>) => void;
-export type EvictEntriesRequestListener<K> = (request: EvictEntriesRequest<K>) => void;
-export type EvictEntriesNotificationListener<K> = (notification: EvictEntriesNotification<K>) => void;
-export type InsertEntriesRequestListener<K, V> = (request: InsertEntriesRequest<K, V>) => void;
-export type InsertEntriesNotificationListener<K, V> = (notification: InsertEntriesNotification<K, V>) => void;
-export type UpdateEntriesRequestListener<K, V> = (request: UpdateEntriesRequest<K, V>) => void;
-export type UpdateEntriesNotificationListener<K, V> = (notification: UpdateEntriesNotification<K, V>) => void;
-
-export type StorageComlinkConfig = {
-    storageId: string,
-    throwExceptionOnTimeout: boolean,
-    requestTimeoutInMs: number,
+export type StorageComlinkSyncSettings = {
+    storageSync: boolean,
+    clearEntries: boolean,
+    getEntries: boolean,
+    getKeys: boolean,
+    getSize: boolean,
+    deleteEntries: boolean,
+    removeEntries: boolean,
+    evictEntries: boolean,
+    insertEntries: boolean,
+    updateEntries: boolean
 }
 
-export abstract class StorageComlink<K, V> {
+export type StorageComlinkConfig = {
+    /**
+     * The identifier of the storage the comlink belongs to.
+     * In case of a storage builder this infromation is automatically fetched 
+     * from the given storage.
+     */
+    storageId: string,
+    /**
+     * indicate if in case of request is timed out should the comlink throws exception
+     * or just assemble the response based on the info it got
+     */
+    throwExceptionOnTimeout: boolean,
+    /**
+     * Determining the timeout for a request generated by this comlink.
+     * in case of a storage builder belongs to a hamok grid, the default value is 
+     * the grid request timeout config setting
+     */
+    requestTimeoutInMs: number,
+    /**
+     * Determine how many response is necessary to resolve the request. 
+     */
+    neededResponse: number,
+    /**
+     * In case a requestId is added explicitly to the ongoing requests set
+     * by calling the addOngoingRequestId() this setting determines the period 
+     * to send notification to the source(s) about an ongoing requests to prevent timeout there
+     * The notification stopped sent if removeOngoingRequestId is called, and it is very important 
+     * to call it explicitly in any case. In another word comlink is not responsible to handle 
+     * automatically an explicitly postponed request to stop sending notification about.
+     */
+    ongoingRequestsSendingPeriodInMs: number;
+
+    /**
+     * Synchronization setting refer to configurations 
+     * influence the message processing. By default each message received and 
+     * dispatched paralelly, however 
+     * that can lead to an undesired behaviour in some cases.
+     * 
+     * For example, let's say two commits are dispatched by a HamokGrid for the same 
+     * storage and one is for delete and one is for insert. if the two commits 
+     * are dispatched at the same time and delete executes faster, but the commit index 
+     * was specifically the insert for first, then it's a problem.
+     * To avoid such situation the synchronize settings determine which operations
+     * must be executed in a blocking mode and which can run parallely.
+     * 
+     * Note: that storage builders may provision this settings 
+     * differently and only change it if you know what you are doing.
+     * 
+     * Note 2: While requests are queued the comlink automatically send the ongoing request 
+     * notification to the source to avoid request timeout exception
+     */
+    synchronize: StorageComlinkSyncSettings
+}
+
+export interface StorageGridLink {
+    receive(message: Message): void;
+    requestStorageSync(): Promise<StorageSyncResult>;
+}
+
+
+export type StorageEncoder<T> = (input: T) => Uint8Array;
+export type StorageDecoder<T> = (input: Uint8Array) => T;
+
+/**
+ * Add: A wrapper for pendingRequests which takes the message
+ * commitIndex into consideration when resolves the requests
+ * 
+ * BlockingEmitter blocks an event emission until the prev is done
+ * blocking should be only for mutating requests / responses
+ * ordinary get requests should go without the blocking behaviour
+ */
+
+export abstract class StorageComlink<K, V> implements StorageGridLink {
     private _config: StorageComlinkConfig;
     private _grid: HamokGrid;
     private _receiver: MessageProcessor<void>;
-    private _emitter = new EventEmitter();
     private _pendingRequests = new Map<string, PendingRequest>();
     private _pendingResponses = new Map<string, PendingResponse>();
     private _responseChunker: ResponseChunker;
+    private _ongoingRequestIds: OngoingRequestIds;
     private _codec: StorageCodec<K, V>;
+    // private _emitter = new EventEmitter();
+    private _emitter = new MessageEmitter();
+
     public constructor(
         config: StorageComlinkConfig,
         grid: HamokGrid,
         responseChunker: ResponseChunker,
         codec: StorageCodec<K, V>,
     ) {
+        this._codec = codec;
         this._config = config;
         this._grid = grid;
         this._responseChunker = responseChunker;
         this._receiver = this._createReceiver();
-        this._codec = codec;
+
+        this._grid.onLeaderChanged(event => {
+            const { actualLeaderId } = event;
+            this._emitter.emit(CHANGED_LEADER_ID_EVENT_NAME, actualLeaderId);
+        }).onRemoteEndpointDetached(remoteEndpointId => {
+            for (const pendingRequest of this._pendingRequests.values()) {
+                pendingRequest.removeEndpointId(remoteEndpointId);
+            }
+            // for (const pendingResponse of this._pendingResponses.values()) {
+            //     if (pendingResponse.sourceEndpointId === remoteEndpointId) {
+            //         pendingResponse.cancel();
+            //     }
+            // }
+        });
+        this._ongoingRequestIds = new OngoingRequestIds(config.ongoingRequestsSendingPeriodInMs);
+        this._ongoingRequestIds.sender = notification => {
+            const message = this._codec.encodeOngoingRequestsNotification(notification);
+            this._dispatchNotification(message, notification.destinationEndpointId)
+        };
+        this._emitter.onEnqueuedRequest((requestId, sourceEndpointId) => {
+            this.addOngoingRequestId(requestId, sourceEndpointId);
+        }).onDequeuedRequest((requestId) => {
+            this.removeOngoingRequestId(requestId)
+        })
     }
 
-    public onChangedLeaderId(listener: RemoteEndpointStateChangedListener): StorageComlink<K, V> {
-        this._grid.onLeaderChanged(event => {
-            const { leaderId } = event;
-            listener(leaderId);
-        })
+    public get localEndpointId(): string {
+        return this._grid.localEndpointId;
+    }
+
+    public get remoteEndpointIds(): ReadonlySet<string> {
+        return this._grid.remoteEndpointIds;
+    }
+
+    public receive(message: Message) {
+        this._receiver.process(message);
+    }
+
+    public addOngoingRequestId(requestId: string, remoteEndpointId?: string): void {
+        if (this._config.ongoingRequestsSendingPeriodInMs < 1) {
+            return;
+        }
+        if (!remoteEndpointId) {
+            logger.warn(`Cannot send pospone notification about a requestId ${requestId} becasue the remote endpointId to send is undefined`);
+            return;
+        }
+        this._ongoingRequestIds.addOngoingRequestId(requestId, remoteEndpointId);
+    }
+
+    public removeOngoingRequestId(requestId: string): void {
+        if (this._config.ongoingRequestsSendingPeriodInMs < 1) {
+            return;
+        }
+        this._ongoingRequestIds.removeOngoingRequestId(requestId);
+    }
+
+    public async requestStorageSync(): Promise<StorageSyncResult> {
+        const promise = new CompletablePromise<StorageSyncResult>();
+        this._emitter.emit(STORAGE_SYNC_REQUESTED_EVENT_NAME, promise);
+        return promise;
+    }
+
+    public onStorageSyncRequested(listener: StorageSyncRequestedListener): StorageComlink<K, V> {
+        const onEvent = this._getOnEvent(this._config.synchronize.storageSync);
+        onEvent(STORAGE_SYNC_REQUESTED_EVENT_NAME, listener);
+        return this;
+    }
+
+    public offStorageSyncRequested(listener: StorageSyncRequestedListener): StorageComlink<K, V> {
+        this._emitter.removeListener(STORAGE_SYNC_REQUESTED_EVENT_NAME, listener);
+        return this;
+    }
+
+    public onChangedLeaderId(listener: ChangedLeaderIdListener): StorageComlink<K, V> {
+        this._emitter.addListener(CHANGED_LEADER_ID_EVENT_NAME, listener);
+        return this;
+    }
+
+    public offChangedLeaderId(listener: ChangedLeaderIdListener): StorageComlink<K, V> {
+        this._emitter.removeListener(CHANGED_LEADER_ID_EVENT_NAME, listener);
         return this;
     }
 
@@ -131,152 +293,167 @@ export abstract class StorageComlink<K, V> {
     }
     
     public onClearEntriesRequest(listener: ClearEntriesRequestListener): StorageComlink<K, V> {
-        this._emitter.on(CLEAR_ENTRIES_REQUEST, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.clearEntries);
+        onEvent(CLEAR_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public offClearEntriesRequest(listener: ClearEntriesRequestListener): StorageComlink<K, V> {
-        this._emitter.off(CLEAR_ENTRIES_REQUEST, listener);
+        this._emitter.removeListener(CLEAR_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public onClearEntriesNotification(listener: ClearEntriesNotificationListener): StorageComlink<K, V> {
-        this._emitter.on(CLEAR_ENTRIES_NOTIFICATION, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.clearEntries);
+        onEvent(CLEAR_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public offClearEntriesNotification(listener: ClearEntriesNotificationListener): StorageComlink<K, V> {
-        this._emitter.off(CLEAR_ENTRIES_NOTIFICATION, listener);
+        this._emitter.removeListener(CLEAR_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public onGetEntriesRequest(listener: GetEntriesRequestListener<K>): StorageComlink<K, V> {
-        this._emitter.on(GET_ENTRIES_REQUEST, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.getEntries);
+        onEvent(GET_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public offGetEntriesRequest(listener: GetEntriesRequestListener<K>): StorageComlink<K, V> {
-        this._emitter.off(GET_ENTRIES_REQUEST, listener);
+        this._emitter.removeListener(GET_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public onGetKeysRequest(listener: GetKeysRequestListener): StorageComlink<K, V> {
-        this._emitter.on(GET_SIZE_REQUEST, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.getKeys);
+        onEvent(GET_SIZE_REQUEST, listener);
         return this;
     }
 
     public offGetKeysRequest(listener: GetKeysRequestListener): StorageComlink<K, V> {
-        this._emitter.off(GET_SIZE_REQUEST, listener);
+        this._emitter.removeListener(GET_SIZE_REQUEST, listener);
         return this;
     }
 
     public onGetSizeRequest(listener: GetSizeRequestListener): StorageComlink<K, V> {
-        this._emitter.on(GET_KEYS_REQUEST, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.getSize);
+        onEvent(GET_KEYS_REQUEST, listener);
         return this;
     }
 
     public offGetSizeRequest(listener: GetSizeRequestListener): StorageComlink<K, V> {
-        this._emitter.off(GET_KEYS_REQUEST, listener);
+        this._emitter.removeListener(GET_KEYS_REQUEST, listener);
         return this;
     }
 
     public onDeleteEntriesRequest(listener: DeleteEntriesRequestListener<K>): StorageComlink<K, V> {
-        this._emitter.on(DELETE_ENTRIES_REQUEST, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.deleteEntries);
+        onEvent(DELETE_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public offDeleteEntriesRequest(listener: DeleteEntriesRequestListener<K>): StorageComlink<K, V> {
-        this._emitter.off(DELETE_ENTRIES_REQUEST, listener);
+        this._emitter.removeListener(DELETE_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public onDeleteEntriesNotification(listener: DeleteEntriesNotificationListener<K>): StorageComlink<K, V> {
-        this._emitter.on(DELETE_ENTRIES_NOTIFICATION, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.deleteEntries);
+        onEvent(DELETE_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public offDeleteEntriesNotification(listener: DeleteEntriesNotificationListener<K>): StorageComlink<K, V> {
-        this._emitter.off(DELETE_ENTRIES_NOTIFICATION, listener);
+        this._emitter.removeListener(DELETE_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public onRemoveEntriesRequest(listener: RemoveEntriesRequestListener<K>): StorageComlink<K, V> {
-        this._emitter.on(REMOVE_ENTRIES_REQUEST, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.removeEntries);
+        onEvent(REMOVE_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public offRemoveEntriesRequest(listener: RemoveEntriesRequestListener<K>): StorageComlink<K, V> {
-        this._emitter.off(REMOVE_ENTRIES_REQUEST, listener);
+        this._emitter.removeListener(REMOVE_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public onRemoveEntriesNotification(listener: RemoveEntriesNotificationListener<K>): StorageComlink<K, V> {
-        this._emitter.on(REMOVE_ENTRIES_NOTIFICATION, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.removeEntries);
+        onEvent(REMOVE_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public offRemoveEntriesNotification(listener: RemoveEntriesNotificationListener<K>): StorageComlink<K, V> {
-        this._emitter.off(REMOVE_ENTRIES_NOTIFICATION, listener);
+        this._emitter.removeListener(REMOVE_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public onEvictEntriesRequest(listener: EvictEntriesRequestListener<K>): StorageComlink<K, V> {
-        this._emitter.on(EVICT_ENTRIES_REQUEST, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.evictEntries);
+        onEvent(EVICT_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public offEvictEntriesRequest(listener: EvictEntriesRequestListener<K>): StorageComlink<K, V> {
-        this._emitter.off(EVICT_ENTRIES_REQUEST, listener);
+        this._emitter.removeListener(EVICT_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public onEvictEntriesNotification(listener: EvictEntriesNotificationListener<K>): StorageComlink<K, V> {
-        this._emitter.on(EVICT_ENTRIES_NOTIFICATION, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.evictEntries);
+        onEvent(EVICT_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public offEvictEntriesNotification(listener: EvictEntriesNotificationListener<K>): StorageComlink<K, V> {
-        this._emitter.off(EVICT_ENTRIES_NOTIFICATION, listener);
+        this._emitter.removeListener(EVICT_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public onInsertEntriesRequest(listener: InsertEntriesRequestListener<K, V>): StorageComlink<K, V> {
-        this._emitter.on(INSERT_ENTRIES_REQUEST, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.insertEntries);
+        onEvent(EVICT_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public offInsertEntriesRequest(listener: InsertEntriesRequestListener<K, V>): StorageComlink<K, V> {
-        this._emitter.off(INSERT_ENTRIES_REQUEST, listener);
+        this._emitter.removeListener(INSERT_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public onInsertEntriesNotification(listener: InsertEntriesNotificationListener<K, V>): StorageComlink<K, V> {
-        this._emitter.on(INSERT_ENTRIES_NOTIFICATION, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.insertEntries);
+        onEvent(INSERT_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public offInsertEntriesNotification(listener: InsertEntriesNotificationListener<K, V>): StorageComlink<K, V> {
-        this._emitter.off(INSERT_ENTRIES_NOTIFICATION, listener);
+        this._emitter.removeListener(INSERT_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public onUpdateEntriesRequest(listener: UpdateEntriesRequestListener<K, V>): StorageComlink<K, V> {
-        this._emitter.on(UPDATE_ENTRIES_REQUEST, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.updateEntries);
+        onEvent(UPDATE_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public offUpdateEntriesRequest(listener: UpdateEntriesRequestListener<K, V>): StorageComlink<K, V> {
-        this._emitter.off(UPDATE_ENTRIES_REQUEST, listener);
+        this._emitter.removeListener(UPDATE_ENTRIES_REQUEST, listener);
         return this;
     }
 
     public onUpdateEntriesNotification(listener: UpdateEntriesNotificationListener<K, V>): StorageComlink<K, V> {
-        this._emitter.on(UPDATE_ENTRIES_NOTIFICATION, listener);
+        const onEvent = this._getOnEvent(this._config.synchronize.updateEntries);
+        onEvent(UPDATE_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
     public offUpdateEntriesNotification(listener: UpdateEntriesNotificationListener<K, V>): StorageComlink<K, V> {
-        this._emitter.off(UPDATE_ENTRIES_NOTIFICATION, listener);
+        this._emitter.removeListener(UPDATE_ENTRIES_NOTIFICATION, listener);
         return this;
     }
 
@@ -451,7 +628,7 @@ export abstract class StorageComlink<K, V> {
         await this._request(message, targetEndpointIds);
     }
 
-    public sendEvictEntriesResponse(response: EvictEntriesRequest<K>): void {
+    public sendEvictEntriesResponse(response: EvictEntriesResponse): void {
         const message = this._codec.encodeEvictEntriesResponse(response);
         this._dispatchResponse(message);
     }
@@ -499,7 +676,6 @@ export abstract class StorageComlink<K, V> {
         );
     }
 
-
     public async requestUpdateEntries(
         entries: ReadonlyMap<K, V>,
         targetEndpointIds?: ReadonlySet<string>
@@ -545,9 +721,10 @@ export abstract class StorageComlink<K, V> {
             .withPendingEndpoints(destinationEndpointIds)
             .withTimeoutInMs(this._config.requestTimeoutInMs)
             .withThrowingTimeoutException(this._config.throwExceptionOnTimeout)
+            .withNeededResponse(this._config.neededResponse)
             .build();
         const prevPendingRequest = this._pendingRequests.get(pendingRequest.id);
-        if (!prevPendingRequest) {
+        if (prevPendingRequest) {
             logger.warn(`Pending Request was already exists for requestId ${pendingRequest.id}`);
         }
         this._pendingRequests.set(pendingRequest.id, pendingRequest);
@@ -622,6 +799,11 @@ export abstract class StorageComlink<K, V> {
             );
             return;
         }
+        if (destinationId === this.localEndpointId || message.destinationId === this.localEndpointId) {
+            // loopback notifications
+            this.receive(message);
+            return;
+        }
         this._dispatch(
             message,
             this.sendNotification.bind(this),
@@ -669,8 +851,16 @@ export abstract class StorageComlink<K, V> {
         pendingRequest.accept(message);
     }
 
+    private _postponePendingRequest(requestId: string): boolean {
+        const pendingRequest = this._pendingRequests.get(requestId);
+        if (!pendingRequest) return false;
+        pendingRequest.postponeTimeout();
+        return true;
+    }
+
     private _createReceiver(): MessageProcessor<void> {
         const dispatchResponse = this._processResponse.bind(this);
+        const postponePendingRequest = this._postponePendingRequest.bind(this);
         const codec = this._codec;
         const emitter = this._emitter;
         const result = new class extends MessageDefaultProcessor<void> {
@@ -703,6 +893,13 @@ export abstract class StorageComlink<K, V> {
                     emitter.emit(GET_ENTRIES_REQUEST, notification);
                 } catch (err) {
                     logger.warn("dispatcher::processGetEntriesRequest(): Error occurred while decoding message", err)
+                }
+            }
+
+            protected processOngoingRequestsNotification(message: Message): void {
+                const notification = codec.decodeOngoingRequestsNotification(message);
+                for (const requestId of notification.requestIds) {
+                    postponePendingRequest(requestId);
                 }
             }
 
@@ -829,7 +1026,7 @@ export abstract class StorageComlink<K, V> {
                     const notification = codec.decodeUpdateEntriesRequest(message);
                     emitter.emit(UPDATE_ENTRIES_REQUEST, notification);
                 } catch (err) {
-                    logger.warn("dispatcher::processHelloNotification(): Error occurred while decoding message", err)
+                    logger.warn("dispatcher::processUpdateEntriesRequest(): Error occurred while decoding message", message, err)
                 }
             }
 
@@ -857,4 +1054,8 @@ export abstract class StorageComlink<K, V> {
         return result;
     }
 
+    private _getOnEvent(blockingListener: boolean) {
+        if (blockingListener) return this._emitter.addBlockingListener.bind(this._emitter);
+        else return this._emitter.addListener.bind(this);
+    }
 }

@@ -1,24 +1,35 @@
 export interface CacheMetrics {
-    readonly hits: number;
+    readonly localHits: number;
+    readonly remoteHits: number;
     readonly misses: number;
     reset(): void;
 }
 
 export class CacheMetricsImpl implements CacheMetrics {
-    private _hits = 0;
+    private _localHits = 0;
+    private _remoteHits = 0;
     private _misses = 0;
     
     public reset(): void {
-        this._hits = 0;
+        this._localHits = 0;
+        this._remoteHits = 0;
         this._misses = 0;
     }
 
-    public get hits(): number {
-        return this._hits;
+    public get localHits(): number {
+        return this._localHits;
     }
 
-    public incrementHits(value?: number): void {
-        this._hits += value ?? 1;
+    public get remoteHits(): number {
+        return this._remoteHits;
+    }
+
+    public incrementLocalHits(value?: number): void {
+        this._localHits += value ?? 1;
+    }
+
+    public incrementRemoteHits(value?: number): void {
+        this._remoteHits += value ?? 1;
     }
 
     public get misses(): number {

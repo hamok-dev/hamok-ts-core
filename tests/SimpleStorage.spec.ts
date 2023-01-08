@@ -1,4 +1,4 @@
-import { SimpleStorage } from "../src/SimpleStorage";
+import { SimpleStorage } from "../src/storages/SimpleStorage";
 import { SimpleSlidingMap } from "../src/SlidingMap";
 
 describe("SimpleStorage", () => {
@@ -36,8 +36,9 @@ describe("SimpleStorage", () => {
         it("cannot restore already set entry", (done) => {
             const storage = createStorage();
             
-            storage.set(1, "one");
-            expect(() => storage.restore(1, "two")).toThrowError();
+            storage.set(1, "one")
+                .then(() => storage.restore(1, "one"))
+                .catch(err => done());
         });
 
         it("restoreAll / getAll", async () => {
@@ -49,7 +50,7 @@ describe("SimpleStorage", () => {
             expect(entries.get(2)).toBe("two");
         });
 
-        it("cannot restore already set entry", (done) => {
+        it("cannot restoreAll already setAll entry", (done) => {
             const storage = createStorage();
             
             storage.setAll(new Map<number, string>([[1, "one"], [2, "two"]]))

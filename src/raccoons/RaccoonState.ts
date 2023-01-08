@@ -109,7 +109,13 @@ export abstract class RaccoonState {
     }
 
     protected commitLogEntry(logEntry: LogEntry) {
-        this.base.commit(logEntry.entry);
+        const message = logEntry.entry;
+        // let's attach the commit index so the message holds that info for
+        // upper layer possible usage
+        // if (!message.raftCommitIndex) {
+        //     message.raftCommitIndex = logEntry.index;
+        // }
+        this.base.commit(message);
     }
 
     protected requestStorageSync(): Promise<void> {

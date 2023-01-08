@@ -1,86 +1,139 @@
+import { ClearEntriesNotification, Collections, createLogger, DeleteEntriesNotification, EvictEntriesNotification } from "@hamok-dev/common";
 import { Storage } from "../storages/Storage";
 import { StorageComlink } from "../storages/StorageComlink";
-import { StorageEvents, StorageEventsImpl } from "../storages/StorageEvents";
+import { StorageEvents } from "../storages/StorageEvents";
 import { CacheMetrics, CacheMetricsImpl } from "./Cache";
+import { CachedStorageBuilder } from "./CachedStorageBuilder";
+
+const logger = createLogger(`CachedStorage`);
+const logNotUsedAction = (context: string, obj: any) => {
+    logger.warn(
+        `${context}: Incoming message has not been processed, becasue the handler is not implemented`, 
+        obj
+    );
+}
+
+export type CachedStorageConfig = {
+    maxKeys: number,
+    maxValues: number,
+}
 
 /**
  * Wraps a Storage and Caches it to a map, but maps are shared
  * accross the grid
  */
 export class CachedStorage<K, V> implements Storage<K, V> {
-    
+    public static builder<U, R>(): CachedStorageBuilder<U, R> {
+        return new CachedStorageBuilder<U, R>();
+    }
+
+    public config: CachedStorageConfig;
     private _metrics = new CacheMetricsImpl();
     private _storage: Storage<K, V>;
     private _cache: Map<K, V>;
     private _comlink: StorageComlink<K, V>;
+    private _pendingFetches: Map<K, Promise<V | undefined>>;
 
-    private constructor(
+    public constructor(
         storage: Storage<K, V>,
         cache: Map<K, V>,
-        comlink: StorageComlink<K, V>
+        comlink: StorageComlink<K, V>,
+        config: CachedStorageConfig,
     ) {
+        this.config = config;
         this._storage = storage;
         this._cache = cache;
+        this._pendingFetches = new Map<K, Promise<V | undefined>>();
         this._comlink = comlink
-            .onClearEntriesRequest(request => {
-                
+            .onClearEntriesRequest(async request => {
+                logNotUsedAction("onInsertEntriesNotification()", request);
             })
-            .onClearEntriesNotification(notification => {
-
+            .onClearEntriesNotification(async notification => {
+                this._cache.clear();
+                logger.debug(`onClearEntriesNotification(): Cleared the cache`, notification);
             })
-            .onGetEntriesRequest(request => {
-
+            .onGetEntriesRequest(async request => {
+                const foundEntries = new Map<K, V>();
+                const pendingFetches: Promise<void>[] = [];
+                // TODO: make it possible to postpone the request waiting time from here
+                // something like GET_REQUEST_ONGOING_NOTIFICATION
+                for (const key of request.keys) {
+                    const value = this._cache.get(key);
+                    if (value) {
+                        foundEntries.set(key, value);
+                    }
+                    const pendingFetch = this._pendingFetches.get(key);
+                    if (pendingFetch) {
+                        const promise = pendingFetch.then<void>(value => {
+                            if (value) {
+                                foundEntries.set(key, value);
+                            }
+                        });
+                        pendingFetches.push(promise);
+                    }
+                }
+                if (0 < pendingFetches.length) {
+                    const allFetches = Promise.all(pendingFetches);
+                    this._comlink.addOngoingRequestId(request.requestId, request.sourceEndpointId)
+                    allFetches.finally(() => {
+                        this._comlink.removeOngoingRequestId(request.requestId);
+                    });
+                    await allFetches;
+                }
+                const response = request.createResponse(
+                    foundEntries
+                );
+                this._comlink.sendGetEntriesResponse(response);
             })
-            .onGetSizeRequest(request => {
-
+            .onGetSizeRequest(async request => {
+                logNotUsedAction("onGetSizeRequest()", request);
             })
-            .onGetKeysRequest(request => {
-
+            .onGetKeysRequest(async request => {
+                logNotUsedAction("onGetKeysRequest()", request);
             })
-            .onDeleteEntriesRequest(request => {
-
+            .onDeleteEntriesRequest(async request => {
+                logNotUsedAction("onDeleteEntriesRequest()", request);
             })
-            .onDeleteEntriesNotification(notification => {
-
+            .onDeleteEntriesNotification(async notification => {
+                logNotUsedAction("onDeleteEntriesNotification()", notification);
             })
-            .onRemoveEntriesRequest(request => {
-
+            .onRemoveEntriesRequest(async request => {
+                logNotUsedAction("onRemoveEntriesRequest()", request);
             })
-            .onRemoveEntriesNotification(notification => {
-
+            .onRemoveEntriesNotification(async notification => {
+                logNotUsedAction("onRemoveEntriesNotification()", notification);
             })
-            .onEvictEntriesRequest(request => {
-
+            .onEvictEntriesRequest(async request => {
+                logNotUsedAction("onEvictEntriesRequest()", request);
             })
-            .onEvictEntriesNotification(notification => {
-
+            .onEvictEntriesNotification(async notification => {
+                for (const key of notification.keys) {
+                    this._cache.delete(key);
+                }
             })
-            .onInsertEntriesRequest(request => {
-
+            .onInsertEntriesRequest(async request => {
+                logNotUsedAction("onInsertEntriesRequest()", request);
             })
-            .onInsertEntriesNotification(notification => {
-
+            .onInsertEntriesNotification(async notification => {
+                logNotUsedAction("onInsertEntriesNotification()", notification);
             })
-            .onUpdateEntriesRequest(request => {
-
+            .onUpdateEntriesRequest(async request => {
+                logNotUsedAction("onUpdateEntriesRequest()", request);
             })
-            .onUpdateEntriesNotification(notification => {
-
+            .onUpdateEntriesNotification(async notification => {
+                logNotUsedAction("onUpdateEntriesNotification()", notification);
             })
-            .onRemoteEndpointJoined(remoteEndpointId => {
-
-            })
-            .onRemoteEndpointDetached(remoteEndpointId => {
-
-            })
-            .onChangedLeaderId(leaderId => {
-
+            .onStorageSyncRequested(async promise => {
+                this._cache.clear();
+                promise.resolve({
+                    success: true,
+                });
             })
             ;
     }
 
     public get id(): string {
-        throw new Error(`Not Implemented`);
+        return this._storage.id;
     }
 
     public get metrics(): CacheMetrics {
@@ -105,58 +158,187 @@ export class CachedStorage<K, V> implements Storage<K, V> {
 
     public async clear(): Promise<void> {
         this._cache.clear();
-        return this._storage.clear();
+
+        await Promise.all([
+            this._comlink.sendClearEntriesNotification(new ClearEntriesNotification()),
+            this._storage.clear()
+        ]);
     }
 
     public async get(key: K): Promise<V | undefined> {
-        throw new Error("Method not implemented.");
+        let value = this._cache.get(key);
+        if (value) {
+            this._metrics.incrementLocalHits();
+            return value;
+        }
+        const remoteEntries = await this._comlink.requestGetEntries(
+            Collections.setOf(key)
+        );
+        value = remoteEntries.get(key);
+        if (value) {
+            this._metrics.incrementRemoteHits();
+            return value;
+        }
+        let pendingFetch = this._pendingFetches.get(key);
+        if (!pendingFetch) {
+            pendingFetch = this._storage.get(key);
+            pendingFetch.then(value => {
+                if (value) {
+                    this._metrics.incrementMisses();
+                    this._cache.set(key, value);
+                }
+            }).finally(() => {
+                this._pendingFetches.delete(key);
+            });
+            this._pendingFetches.set(key, pendingFetch);
+        }
+        return await pendingFetch;
     }
 
     public async getAll(keys: ReadonlySet<K>): Promise<ReadonlyMap<K, V>> {
-        throw new Error("Method not implemented.");
+        const localCachedEntries = new Map<K, V>();
+        const missingKeys = new Set<K>();
+        for (const key of keys) {
+            const localValue = this._cache.get(key);
+            if (localValue) {
+                localCachedEntries.set(key, localValue);
+            } else {
+                missingKeys.add(key)
+            }
+        }
+        if (0 < localCachedEntries.size) {
+            this._metrics.incrementLocalHits(localCachedEntries.size);
+        }
+        if (missingKeys.size < 1) {
+            return localCachedEntries;
+        }
+        const remoteCachedEntries = await this._comlink.requestGetEntries(missingKeys);
+        if (0 < remoteCachedEntries.size) {
+            this._metrics.incrementRemoteHits(remoteCachedEntries.size);
+        }
+        for (const key of remoteCachedEntries.keys()) {
+            missingKeys.delete(key);
+        }
+        if (missingKeys.size < 1) {
+            return Collections.concatMaps(
+                new Map<K, V>(),
+                localCachedEntries,
+                remoteCachedEntries
+            );
+        }
+        this._metrics.incrementMisses(missingKeys.size);
+        return Collections.concatMaps(
+            new Map<K, V>(),
+            localCachedEntries,
+            remoteCachedEntries,
+            await this._storage.getAll(missingKeys)
+        );
     }
     
     public async set(key: K, value: V): Promise<V | undefined> {
-        throw new Error("Method not implemented.");
+        const result = await this.setAll(
+            Collections.mapOf([key, value])
+        );
+        return result.get(key);
     }
     
     public async setAll(entries: ReadonlyMap<K, V>): Promise<ReadonlyMap<K, V>> {
-        throw new Error("Method not implemented.");
+        const keys = Collections.setFrom(entries.keys());
+        for (const key of keys) {
+            this._cache.delete(key);
+        }
+        const [ result ] = await Promise.all([
+            this._storage.setAll(entries),
+            this._comlink.sendEvictEntriesNotification(new EvictEntriesNotification(
+                keys
+            ))
+        ]);
+        return result;
     }
     
     public async insert(key: K, value: V): Promise<V | undefined> {
-        throw new Error("Method not implemented.");
+        const result = await this.insertAll(
+            Collections.mapOf([key, value])
+        );
+        return result.get(key);
     }
     
     public async insertAll(entries: ReadonlyMap<K, V>): Promise<ReadonlyMap<K, V>> {
-        throw new Error("Method not implemented.");
+        const keys = Collections.setFrom(entries.keys());
+        for (const key of keys) {
+            this._cache.delete(key);
+        }
+        const [ result ] = await Promise.all([
+            this._storage.insertAll(entries),
+            this._comlink.sendEvictEntriesNotification(new EvictEntriesNotification(
+                keys
+            ))
+        ]);
+        return result;
     }
     
     public async delete(key: K): Promise<boolean> {
-        throw new Error("Method not implemented.");
+        this._cache.delete(key);
+        const [result] = await Promise.all([
+            this._storage.delete(key),
+            this._comlink.sendEvictEntriesNotification(new EvictEntriesNotification(
+                Collections.setOf(key)
+            ))
+        ])
+        return result;
     }
     
     public async deleteAll(keys: ReadonlySet<K>): Promise<ReadonlySet<K>> {
-        throw new Error("Method not implemented.");
+        if (keys.size < 1) {
+            return Collections.emptySet<K>();
+        }
+        keys.forEach(key => this._cache.delete(key));
+        const [result] = await Promise.all([
+            this._storage.deleteAll(keys),
+            this._comlink.sendEvictEntriesNotification(new EvictEntriesNotification(keys))
+        ]);
+        return result;
     }
     
     public async evict(key: K): Promise<void> {
-        throw new Error("Method not implemented.");
+        this._cache.delete(key);
+        await Promise.all([
+            this._storage.evict(key),
+            this._comlink.sendEvictEntriesNotification(new EvictEntriesNotification(
+                Collections.setOf(key)
+            ))
+        ]);
     }
     
     public async evictAll(keys: ReadonlySet<K>): Promise<void> {
-        throw new Error("Method not implemented.");
+        keys.forEach(key => this._cache.delete(key));
+        await Promise.all([
+            this._storage.evictAll(keys),
+            this._comlink.sendEvictEntriesNotification(new EvictEntriesNotification(keys))
+        ]);
     }
     
     public async restore(key: K, value: V): Promise<void> {
-        throw new Error("Method not implemented.");
+        await Promise.all([
+            this._comlink.sendEvictEntriesNotification(new EvictEntriesNotification(
+                Collections.setOf(key)
+            )),
+            this._storage.restore(key, value)
+        ]);
     }
     
     public async restoreAll(entries: ReadonlyMap<K, V>): Promise<void> {
-        throw new Error("Method not implemented.");
+        const notification = new EvictEntriesNotification(
+            Collections.setFrom(entries.keys())
+        );
+        await Promise.all([
+            this._storage.restoreAll(entries),
+            this._comlink.sendEvictEntriesNotification(notification)
+        ]);
     }
     
     public async *[Symbol.asyncIterator](): AsyncIterableIterator<[K, V]> {
-        throw new Error("Method not implemented.");
+        return this._storage[Symbol.asyncIterator];
     }
+
 }

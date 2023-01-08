@@ -53,8 +53,35 @@ export class FollowerState extends RaccoonState {
     }
 
     public receiveHelloNotification(notification: HelloNotification): void {
-        // if auto discovery is on and no leader has been elected we add the endpoint
         logger.trace("{} received hello notification {}", this.getLocalPeerId(), notification);
+        // hello can be a broadcasted hello from a remote endpoint
+        // or a hello response for our hello
+        if (!notification.destinationPeerId) {
+            // so this is a broadcasted hello.
+            if (notification.raftLeaderId || !this.leaderId) {
+                // if the remote endpoint know who is the leader or we don't we do not respond.
+                return;    
+            }
+            this.sendHelloNotification(new HelloNotification(
+                this.getLocalPeerId(),
+                notification.sourcePeerId,
+                this.leaderId
+            ));
+            return;
+        }
+        if (notification.destinationPeerId === this.getLocalPeerId()) {
+            // response to our hello broadcast
+            if (!notification.raftLeaderId || this.leaderId) {
+                // if we have our leader id or the response does not this hello is pointless
+                return;
+            }
+            if (this.remotePeers.get(notification.raftLeaderId) === undefined) {
+                // so there is a leader in the grid, but we don't know about it
+                // it's better not to start an election just becasue we 
+                // don't have enough information
+                this._updated = Date.now();
+            }
+        }
     }
 
     public receiveEndpointStatesNotification(notification: EndpointStatesNotification): void {
@@ -142,7 +169,7 @@ export class FollowerState extends RaccoonState {
         this._timedOutElection = 0;
 
          // set the actual leader
-         if (requestChunk.leaderId !== null) {
+         if (requestChunk.leaderId !== undefined) {
             this.setActualLeaderId(requestChunk.leaderId);
         }
 
@@ -270,38 +297,37 @@ export class FollowerState extends RaccoonState {
     public get state(): RaftState {
         return RaftState.FOLLOWER;
     }
-    
+
     public run(): void {
         const config = this.config;
-        var now = Date.now();
+        const now = Date.now();
+        const localPeerId = this.getLocalPeerId();
         if (this.leaderId === undefined || !this._receivedEndpointNotification) {
             // if we don't know any leader, or we have not received endpoint state notification and
             // since the sentHello is -1 by default that ensures hello is sent when state change
             // happens, which if we have a leader makes it to send the endpoint state notification
             if (config.sendingHelloTimeoutInMs < now - this._sentHello) {
-                var notification = new HelloNotification(this.getLocalPeerId(), undefined);
+                const notification = new HelloNotification(localPeerId);
                 this.sendHelloNotification(notification);
                 logger.debug(`Sent hello message`, notification);
                 this._sentHello = now;
             }
         }
-        const updated = this._updated;
-        const elapsedInMs = now - updated;
-        // logger.trace(`updated ${updated}, elapsedInMs: ${elapsedInMs} this._extraWaitingTime: ${this._extraWaitingTime}`);
-        if (config.followerMaxIdleInMs + this._extraWaitingTime < elapsedInMs) {
-            // we don't know a leader at this point
-            this.setActualLeaderId(undefined);
-            if (this.remotePeers.size < 1) {
-                // if we alone, there is not much point to start an election
-                return;
-            }
-
-            logger.debug(`${this.getLocalPeerId()} is timed out to wait for append logs request (maxIdle: ${config.followerMaxIdleInMs}, elapsed: ${elapsedInMs}) Previously unsuccessful elections: ${this._timedOutElection}, extra waiting time: ${this._extraWaitingTime}`);
-            this.elect(this._timedOutElection);
+        const elapsedInMs = now - this._updated;
+        if (elapsedInMs <= config.followerMaxIdleInMs + this._extraWaitingTime) {
+            // we have still time before we start an election
             return;
         }
+        // we don't know a leader at this point
+        this.setActualLeaderId(undefined);
+        if (this.remotePeers.size < 1) {
+            // if we are alone, there is no point to start an election
+            return;
+        }
+
+        logger.debug(`${localPeerId} is timed out to wait for append logs request (maxIdle: ${config.followerMaxIdleInMs}, elapsed: ${elapsedInMs}) Previously unsuccessful elections: ${this._timedOutElection}, extra waiting time: ${this._extraWaitingTime}`);
+        this.elect(this._timedOutElection);
     }
-    
 
     private updateCommitIndex(leaderCommitIndex: number) {
         const logs = this.logs;;

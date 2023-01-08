@@ -1,6 +1,16 @@
+import { createLogger } from "@hamok-dev/common";
 import { Storage } from "../storages/Storage";
 import { StorageComlink } from "../storages/StorageComlink";
 import { StorageEvents, StorageEventsImpl } from "../storages/StorageEvents";
+
+const logger = createLogger("ReplicatedStorage");
+
+const logNotUsedAction = (context: string, obj: any) => {
+    logger.warn(
+        `${context}: Incoming message has not been processed, becasue the handler is not implemented`, 
+        obj
+    );
+}
 
 /**
  * Replicated storage replicates all entries on all distributed storages
@@ -12,49 +22,91 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
     ) {
         this._comlink = comlink
             .onClearEntriesRequest(request => {
-                
+                const response = request.createResponse();
+                this._storage.clear();
+                this._comlink.sendClearEntriesResponse(response);
             })
             .onClearEntriesNotification(notification => {
-
+                this._storage.clear();
             })
-            .onGetEntriesRequest(request => {
-
+            .onGetEntriesRequest(async request => {
+                const foundEntries = await this._storage.getAll(request.keys);
+                const response = request.createResponse(foundEntries);
+                this._comlink.sendGetEntriesResponse(response);
             })
-            .onGetSizeRequest(request => {
-
+            .onGetSizeRequest(async request => {
+                const response = request.createResponse(
+                    await this._storage.size()
+                );
+                this._comlink.sendGetSizeResponse(response);
             })
-            .onGetKeysRequest(request => {
-
+            .onGetKeysRequest(async request => {
+                const response = request.createResponse(
+                    await this._storage.keys()
+                );
+                this._comlink.sendGetKeysResponse(response);
             })
-            .onDeleteEntriesRequest(request => {
-
+            .onDeleteEntriesRequest(async request => {
+                const deletedKeys = await this._storage.deleteAll(request.keys)
+                const response = request.createResponse(
+                    deletedKeys
+                );
+                this._comlink.sendDeleteEntriesResponse(response);
             })
-            .onDeleteEntriesNotification(notification => {
-
+            .onDeleteEntriesNotification(async notification => {
+                logNotUsedAction(
+                    "onClearEntriesRequest()",
+                    response,
+                );
+                // await this._storage.deleteAll(notification.keys);
             })
-            .onRemoveEntriesRequest(request => {
-
+            .onRemoveEntriesRequest(async request => {
+                logNotUsedAction(
+                    "onClearEntriesRequest()",
+                    response,
+                );
             })
-            .onRemoveEntriesNotification(notification => {
-
+            .onRemoveEntriesNotification(async notification => {
+                logNotUsedAction(
+                    "onClearEntriesRequest()",
+                    response,
+                );
             })
-            .onEvictEntriesRequest(request => {
-
+            .onEvictEntriesRequest(async request => {
+                logNotUsedAction(
+                    "onClearEntriesRequest()",
+                    response,
+                );
             })
-            .onEvictEntriesNotification(notification => {
-
+            .onEvictEntriesNotification(async notification => {
+                logNotUsedAction(
+                    "onClearEntriesRequest()",
+                    response,
+                );
             })
-            .onInsertEntriesRequest(request => {
-
+            .onInsertEntriesRequest(async request => {
+                logNotUsedAction(
+                    "onClearEntriesRequest()",
+                    response,
+                );
             })
-            .onInsertEntriesNotification(notification => {
-
+            .onInsertEntriesNotification(async notification => {
+                logNotUsedAction(
+                    "onClearEntriesRequest()",
+                    response,
+                );
             })
-            .onUpdateEntriesRequest(request => {
-
+            .onUpdateEntriesRequest(async request => {
+                logNotUsedAction(
+                    "onClearEntriesRequest()",
+                    response,
+                );
             })
             .onUpdateEntriesNotification(notification => {
-
+                logNotUsedAction(
+                    "onClearEntriesRequest()",
+                    response,
+                );
             })
             .onRemoteEndpointJoined(remoteEndpointId => {
 
