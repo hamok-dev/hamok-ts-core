@@ -4,13 +4,14 @@ import { ResponseChunkerImpl } from "../messages/ResponseChunkerImpl";
 import { SimpleStorage } from "../storages/SimpleStorage";
 import { Storage } from "../storages/Storage";
 import { StorageDecoder, StorageEncoder } from "../storages/StorageComlink";
-import { SegmentedStorage, SegmentedStorageConfig } from "./SegmentedStorage";
+import { ReplicatedStorage, ReplicatedStorageConfig } from "./ReplicatedStorage";
 import { v4 as uuid } from "uuid";
 
-export class SegmentedStorageBuilder<K, V> {
+
+export class ReplicatedStorageBuilder<K, V> {
     private readonly _generatedStorageId: string;
     private readonly _generatedRequestTimeoutInMs: number;
-    private _config: SegmentedStorageConfig;
+    private _config: ReplicatedStorageConfig;
     private _grid?: HamokGrid;
     private _baseStorage?: Storage<K, V>;
     private _keyEncoder?: StorageEncoder<K>;
@@ -29,7 +30,6 @@ export class SegmentedStorageBuilder<K, V> {
             maxValues: 0,
             storageId: this._generatedStorageId,
             ongoingRequestsSendingPeriodInMs: 0,
-            maxRecursionRetry: 3,
             synchronize: {
                 storageSync: true,
                 clearEntries: true,
@@ -49,44 +49,44 @@ export class SegmentedStorageBuilder<K, V> {
         return this._baseStorage;
     }
 
-    public setBaseStorage(storage?: Storage<K, V>): SegmentedStorageBuilder<K, V> {
+    public setBaseStorage(storage?: Storage<K, V>): ReplicatedStorageBuilder<K, V> {
         if (!storage) return this;
         this._baseStorage = storage;
         this._config.storageId = storage.id;
         return this;
     }
 
-    public setHamokGrid(grid: HamokGrid): SegmentedStorageBuilder<K, V> {
+    public setHamokGrid(grid: HamokGrid): ReplicatedStorageBuilder<K, V> {
         this._grid = grid;
         return this;
     }
 
-    public withKeyEncoder(encoder: StorageEncoder<K>): SegmentedStorageBuilder<K, V> {
+    public withKeyEncoder(encoder: StorageEncoder<K>): ReplicatedStorageBuilder<K, V> {
         this._keyEncoder = encoder;
         return this;
     }
     
-    public withKeyDecoder(decoder: StorageDecoder<K>): SegmentedStorageBuilder<K, V> {
+    public withKeyDecoder(decoder: StorageDecoder<K>): ReplicatedStorageBuilder<K, V> {
         this._keyDecoder = decoder;
         return this;
     }
     
-    public withValueEncoder(encoder: StorageEncoder<V>): SegmentedStorageBuilder<K, V> {
+    public withValueEncoder(encoder: StorageEncoder<V>): ReplicatedStorageBuilder<K, V> {
         this._valueEncoder = encoder;
         return this;
     }
     
-    public withValueDecoder(decoder: StorageDecoder<V>): SegmentedStorageBuilder<K, V> {
+    public withValueDecoder(decoder: StorageDecoder<V>): ReplicatedStorageBuilder<K, V> {
         this._valueDecoder = decoder
         return this;
     }
 
-    public withConfig(partialConfig: Partial<SegmentedStorageConfig>): SegmentedStorageBuilder<K, V> {
+    public withConfig(partialConfig: Partial<ReplicatedStorageConfig>): ReplicatedStorageBuilder<K, V> {
         Object.assign(this._config, partialConfig);
         return this;
     }
     
-    public build(): SegmentedStorage<K, V> {
+    public build(): ReplicatedStorage<K, V> {
         if (!this._baseStorage) {
             this._baseStorage = SimpleStorage.builder<K, V>()
                 .setId(this._config.storageId)
@@ -166,10 +166,10 @@ export class SegmentedStorageBuilder<K, V> {
                 grid.transport.send(message);
             })
             .build();
-        const result = new SegmentedStorage<K, V>(
+        const result = new ReplicatedStorage<K, V>(
+            this._config,
             this._baseStorage,
             comlink,
-            this._config
         );
         grid.addStorageLink(result.id, comlink);
         return result;

@@ -31,15 +31,15 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
 
     private _storage: Storage<K, V>;
     private _comlink: StorageComlink<K, V>;
-    private _config: SeparatedStorageConfig;
+    public readonly config: SeparatedStorageConfig;
 
     public constructor(
         storage: Storage<K, V>,
         comlink: StorageComlink<K, V>,
         config: SeparatedStorageConfig
     ) {
+        this.config = config;
         this._storage = storage;
-        this._config = config;
         this._comlink = comlink
             .onClearEntriesRequest(async request => {
                 const response = request.createResponse();
@@ -212,7 +212,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
         if (keys.size <= localEntries.size) {
             return localEntries;
         }
-        const requests = Collections.splitSet<K>(keys, this._config.maxKeys, () => [keys])
+        const requests = Collections.splitSet<K>(keys, this.config.maxKeys, () => [keys])
             .map(chunk => this._comlink.requestGetEntries(chunk))
             ;
         const result = new Map<K, V>(localEntries);
@@ -265,7 +265,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitMap<K, V>(
             remainingEntries, 
-            Math.min(this._config.maxKeys, this._config.maxValues),
+            Math.min(this.config.maxKeys, this.config.maxValues),
             () => [remainingEntries]
         ).map(batchEntries => this._comlink.requestUpdateEntries(batchEntries));
         
@@ -305,7 +305,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitSet<K>(
             missingKeys, 
-            this._config.maxKeys,
+            this.config.maxKeys,
             () => [missingKeys]
         ).map(batchKeys => this._comlink.requestGetEntries(batchKeys));
         
@@ -368,7 +368,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
 
         const requests = Collections.splitSet<K>(
             remainingKeys, 
-            this._config.maxKeys,
+            this.config.maxKeys,
             () => [remainingKeys ?? new Set<K>()]
         ).map(batchKeys => this._comlink.requestDeleteEntries(batchKeys));
         
@@ -402,7 +402,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
         const batchIterator = new BatchIterator(
             keys,
             this.getAll.bind(this),
-            this._config.maxValues
+            this.config.maxValues
         );
         for await (const entry of batchIterator.asyncIterator()) {
             yield entry;
@@ -427,10 +427,6 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
 
     public localClearStorage(): Promise<void> {
         return this._storage.clear();
-    }
-
-    public get config(): SeparatedStorageConfig {
-        return this._config;
     }
 
     public async checkCollidingEntries() {
@@ -478,7 +474,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
             ? [Promise.resolve()]
             : Collections.splitSet<K>(
                 collidingKeysToRemoveRemotely, 
-                this._config.maxKeys,
+                this.config.maxKeys,
                 () => [collidingKeysToRemoveRemotely]
             ).map(batchKeys => this._comlink.requestEvictEntries(batchKeys));
         const localRequest = collidingKeysToRemoteLocally.size < 1

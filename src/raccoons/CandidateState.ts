@@ -104,8 +104,10 @@ export class CandidateState extends RaccoonState {
     }
 
     public receiveAppendEntriesRequest(request: RaftAppendEntriesRequestChunk): void {
-        // a leader has been elected, let's go back to the follower state
-        this.follow();
+        if (this._electionTerm <= request.term) {
+            // a leader has been elected, let's go back to the follower state
+            this.follow();
+        }
     }
 
     public receiveAppendEntriesResponse(response: RaftAppendEntriesResponse): void {

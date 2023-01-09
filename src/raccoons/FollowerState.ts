@@ -129,6 +129,7 @@ export class FollowerState extends RaccoonState {
             // when we vote for this candidate for the first time,
             // let's restart the timer, so we wait a bit more to give time to win the election before we run for presidency.
             props.votedFor = request.candidateId;
+            this._updated = Date.now();
         } else {
             // maybe we already voted for the candidate itself?
             voteGranted = props.votedFor === request.candidateId;

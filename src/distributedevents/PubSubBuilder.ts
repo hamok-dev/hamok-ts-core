@@ -22,6 +22,11 @@ export class PubSubBuilder {
         }
     }
 
+    public setHamokGrid(grid: HamokGrid): PubSubBuilder {
+        this._grid = grid;
+        return this;
+    }
+
     public withConfig(partialConfig: Partial<PubSubConfig>): PubSubBuilder {
         Object.assign(this._config, partialConfig);
         return this;

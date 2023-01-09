@@ -1,7 +1,8 @@
-import { createLogger } from "@hamok-dev/common";
+import { Collections, createLogger } from "@hamok-dev/common";
 import { Storage } from "../storages/Storage";
-import { StorageComlink } from "../storages/StorageComlink";
+import { StorageComlink, StorageComlinkConfig } from "../storages/StorageComlink";
 import { StorageEvents, StorageEventsImpl } from "../storages/StorageEvents";
+import { ReplicatedStorageBuilder } from "./ReplicatesStorageBuilder";
 
 const logger = createLogger("ReplicatedStorage");
 
@@ -12,22 +13,46 @@ const logNotUsedAction = (context: string, obj: any) => {
     );
 }
 
+export type ReplicatedStorageConfig = StorageComlinkConfig & {
+    maxKeys: number;
+    maxValues: number;
+}
+
 /**
  * Replicated storage replicates all entries on all distributed storages
  */
 export class ReplicatedStorage<K, V> implements Storage<K, V> {
+    public static builder<U, R>(): ReplicatedStorageBuilder<U, R> {
+        return new ReplicatedStorageBuilder<U, R>();
+    }
+
+    public readonly config: ReplicatedStorageConfig;
+    private _standalone: boolean;
+    private _storage: Storage<K, V>;
     private _comlink: StorageComlink<K, V>;
-    private constructor(
+    private _ongoingSync?: Promise<void>;
+
+    public constructor(
+        config: ReplicatedStorageConfig,
+        storage: Storage<K, V>,
         comlink: StorageComlink<K, V>
     ) {
+        this.config = config;
+        this._standalone = true;
+        this._storage = storage;
         this._comlink = comlink
-            .onClearEntriesRequest(request => {
-                const response = request.createResponse();
+            .onClearEntriesRequest(async request => {
                 this._storage.clear();
-                this._comlink.sendClearEntriesResponse(response);
+                if (request.sourceEndpointId === this._comlink.localEndpointId) {
+                    const response = request.createResponse();
+                    this._comlink.sendClearEntriesResponse(response);
+                }
             })
-            .onClearEntriesNotification(notification => {
-                this._storage.clear();
+            .onClearEntriesNotification(async notification => {
+                logNotUsedAction(
+                    "onClearEntriesNotification", 
+                    notification
+                );
             })
             .onGetEntriesRequest(async request => {
                 const foundEntries = await this._storage.getAll(request.keys);
@@ -47,65 +72,67 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                 this._comlink.sendGetKeysResponse(response);
             })
             .onDeleteEntriesRequest(async request => {
-                const deletedKeys = await this._storage.deleteAll(request.keys)
-                const response = request.createResponse(
-                    deletedKeys
-                );
-                this._comlink.sendDeleteEntriesResponse(response);
+                const deletedKeys = await this._storage.deleteAll(request.keys);
+                if (request.requestId === this._comlink.localEndpointId) {
+                    const response = request.createResponse(deletedKeys);
+                    this._comlink.sendDeleteEntriesResponse(response);
+                }
             })
             .onDeleteEntriesNotification(async notification => {
                 logNotUsedAction(
-                    "onClearEntriesRequest()",
-                    response,
+                    "onDeleteEntriesNotification()",
+                    notification,
                 );
-                // await this._storage.deleteAll(notification.keys);
             })
             .onRemoveEntriesRequest(async request => {
                 logNotUsedAction(
-                    "onClearEntriesRequest()",
-                    response,
+                    "onRemoveEntriesRequest()",
+                    request,
                 );
             })
             .onRemoveEntriesNotification(async notification => {
                 logNotUsedAction(
-                    "onClearEntriesRequest()",
-                    response,
+                    "onRemoveEntriesNotification()",
+                    notification,
                 );
             })
             .onEvictEntriesRequest(async request => {
-                logNotUsedAction(
-                    "onClearEntriesRequest()",
-                    response,
-                );
+                await this._storage.evictAll(request.keys);
+                if (request.requestId === this._comlink.localEndpointId) {
+                    const response = request.createResponse();
+                    this._comlink.sendEvictEntriesResponse(response);
+                }
             })
             .onEvictEntriesNotification(async notification => {
                 logNotUsedAction(
-                    "onClearEntriesRequest()",
-                    response,
+                    "onEvictEntriesNotification()",
+                    notification,
                 );
             })
             .onInsertEntriesRequest(async request => {
-                logNotUsedAction(
-                    "onClearEntriesRequest()",
-                    response,
-                );
+                const alreadyExistingEntries = await this._storage.insertAll(request.entries);
+                if (request.requestId === this._comlink.localEndpointId) {
+                    const response = request.createResponse(alreadyExistingEntries);
+                    this._comlink.sendInsertEntriesResponse(response);
+                }
             })
             .onInsertEntriesNotification(async notification => {
                 logNotUsedAction(
-                    "onClearEntriesRequest()",
-                    response,
+                    "onInsertEntriesNotification()",
+                    notification,
                 );
             })
             .onUpdateEntriesRequest(async request => {
-                logNotUsedAction(
-                    "onClearEntriesRequest()",
-                    response,
-                );
+                const updatedEntries = await this._storage.setAll(request.entries);
+                if (request.requestId === this._comlink.localEndpointId) {
+                    const response = request.createResponse(updatedEntries);
+                    this._comlink.sendUpdateEntriesResponse(response);
+                }
             })
-            .onUpdateEntriesNotification(notification => {
+            .onUpdateEntriesNotification(async notification => {
                 logNotUsedAction(
-                    "onClearEntriesRequest()",
-                    response,
+                    "onUpdateEntriesNotification()",
+                    notification,
                 );
             })
             .onRemoteEndpointJoined(remoteEndpointId => {
@@ -114,85 +141,228 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
             .onRemoteEndpointDetached(remoteEndpointId => {
 
             })
-            .onChangedLeaderId(leaderId => {
-
+            .onChangedLeaderId(async leaderId => {
+                if (leaderId === undefined) {
+                    return;
+                }
+                const wasAlone = this._standalone;
+                if (!wasAlone) return;
+                if (this._ongoingSync) {
+                    await this._ongoingSync;
+                    return;
+                }
+                this._ongoingSync = new Promise(async resolve => {
+                    logger.info(`Storage ${this.id} is joining to the grid`);
+                    this._standalone = false;
+                    await this._clearAndSetAllEntries()
+                });
+                this._ongoingSync.catch(err => {
+                    logger.warn(`onChangedLeaderId(): Error occurred while performing operation`, err);
+                }).finally(() => {
+                    this._ongoingSync = undefined;
+                });
+            })
+            .onStorageSyncRequested(async promise => {
+                if (this._ongoingSync) {
+                    await this._ongoingSync;
+                    return;
+                }
+                this._ongoingSync = new Promise(async resolve => {
+                    logger.info(`Storage ${this.id} is being synchronized`);
+                    await this._clearAndSetAllEntries()
+                    resolve();
+                });
+                this._ongoingSync.then(() => {
+                    promise.resolve({
+                        success: true,
+                    })
+                }).catch(err => {
+                    logger.warn(`onChangedLeaderId(): Error occurred while performing operation`, err);
+                    promise.resolve({
+                        success: false,
+                        errors: [err]
+                    })
+                }).finally(() => {
+                    this._ongoingSync = undefined;
+                });
             })
             ;
     }
 
+    private _clearAndSetAllEntries(): Promise<void> {
+        return new Promise(async resolve => {
+            const keys = await this._storage.keys();
+            const entries = await this._storage.getAll(keys);
+            await this._storage.clear();
+            await this.setAll(entries);
+            resolve();
+        });
+    }
+
     public get id(): string {
-        throw new Error(`Not Implemented`);
+        return this._storage.id;
     }
     
     public get events(): StorageEvents<K, V> {
-        return this._events;
+        return this._storage.events;
     }
 
     public async size(): Promise<number> {
-        throw new Error(`Not Implemented`);
+        return this._storage.size();
     }
 
     public async isEmpty(): Promise<boolean> {
-        throw new Error(`Not Implemented`);
+        return this._storage.isEmpty();
     }
 
     public async keys(): Promise<ReadonlySet<K>> {
-        throw new Error("Method not implemented.");
+        return this._storage.keys();
     }
 
     public async clear(): Promise<void> {
-        throw new Error("Method not implemented.");
+        if (this._standalone) {
+            return this._storage.clear();
+        }
+        return this._comlink.requestClearEntries();
     }
 
     public async get(key: K): Promise<V | undefined> {
-        throw new Error("Method not implemented.");
+        return this._storage.get(key);
     }
 
     public async getAll(keys: ReadonlySet<K>): Promise<ReadonlyMap<K, V>> {
-        throw new Error("Method not implemented.");
+        return this._storage.getAll(keys);
     }
     
     public async set(key: K, value: V): Promise<V | undefined> {
-        throw new Error("Method not implemented.");
+        const result = await this.setAll(
+            Collections.mapOf([key, value])
+        );
+        return result.get(key);
     }
     
     public async setAll(entries: ReadonlyMap<K, V>): Promise<ReadonlyMap<K, V>> {
-        throw new Error("Method not implemented.");
+        if (entries.size < 1) {
+            return Collections.emptyMap<K, V>();
+        }
+        if (this._standalone) {
+            return this._storage.setAll(entries);
+        }
+        const requests = Collections.splitMap<K, V>(
+            entries,
+            Math.min(this.config.maxKeys, this.config.maxValues)
+        ).map(batchedEntries => this._comlink.requestUpdateEntries(
+            batchedEntries,
+            Collections.setOf(this._comlink.localEndpointId)
+        ));
+        return Collections.concatMaps(
+            new Map<K, V>(),
+            ...(await Promise.all(requests))
+        );
     }
     
     public async insert(key: K, value: V): Promise<V | undefined> {
-        throw new Error("Method not implemented.");
+        const result = await this.insertAll(
+            Collections.mapOf([key, value])
+        );
+        return result.get(key);
     }
     
     public async insertAll(entries: ReadonlyMap<K, V>): Promise<ReadonlyMap<K, V>> {
-        throw new Error("Method not implemented.");
+        if (entries.size < 1) {
+            return Collections.emptyMap<K, V>();
+        }
+        if (this._standalone) {
+            return this._storage.insertAll(entries);
+        }
+        const requests = Collections.splitMap<K, V>(
+            entries,
+            Math.min(this.config.maxKeys, this.config.maxValues)
+        ).map(batchedEntries => this._comlink.requestInsertEntries(
+            batchedEntries,
+            Collections.setOf(this._comlink.localEndpointId)
+        ));
+        return Collections.concatMaps(
+            new Map<K, V>(),
+            ...(await Promise.all(requests))
+        );
     }
     
     public async delete(key: K): Promise<boolean> {
-        throw new Error("Method not implemented.");
+        const result = await this.deleteAll(
+            Collections.setOf(key)
+        );
+        return result.has(key);
     }
     
     public async deleteAll(keys: ReadonlySet<K>): Promise<ReadonlySet<K>> {
-        throw new Error("Method not implemented.");
+        if (keys.size < 1) {
+            return Collections.emptySet<K>();
+        }
+        if (this._standalone) {
+            return this._storage.deleteAll(keys);
+        }
+        const requests = Collections.splitSet<K>(
+            keys,
+            Math.min(this.config.maxKeys, this.config.maxValues)
+        ).map(batchedEntries => this._comlink.requestDeleteEntries(
+            batchedEntries,
+            Collections.setOf(this._comlink.localEndpointId)
+        ));
+        return Collections.concatSet<K>(
+            new Set<K>(),
+            ...(await Promise.all(requests))
+        );
     }
     
     public async evict(key: K): Promise<void> {
-        throw new Error("Method not implemented.");
+        return this.evictAll(
+            Collections.setOf(key)
+        );
     }
     
     public async evictAll(keys: ReadonlySet<K>): Promise<void> {
-        throw new Error("Method not implemented.");
+        if (keys.size < 1) {
+            return;
+        }
+        if (this._standalone) {
+            return this._storage.evictAll(keys);
+        }
+        const requests = Collections.splitSet<K>(
+            keys,
+            Math.min(this.config.maxKeys, this.config.maxValues)
+        ).map(batchedEntries => this._comlink.requestDeleteEntries(
+            batchedEntries,
+            Collections.setOf(this._comlink.localEndpointId)
+        ));
+        await Promise.all(requests);
     }
     
     public async restore(key: K, value: V): Promise<void> {
-        throw new Error("Method not implemented.");
+        return this.restoreAll(
+            Collections.mapOf([key, value])
+        );
     }
     
     public async restoreAll(entries: ReadonlyMap<K, V>): Promise<void> {
-        throw new Error("Method not implemented.");
+        if (entries.size < 1) {
+            return;
+        }
+        if (this._standalone) {
+            return this._storage.restoreAll(entries);
+        }
+        throw new Error(`Not implemented`);
+        // const requests = Collections.splitMap<K, V>(
+        //     entries,
+        //     Math.min(this.config.maxKeys, this.config.maxValues)
+        // ).map(batchedEntries => this._comlink.r(
+        //     batchedEntries,
+        //     Collections.setOf(this._comlink.localEndpointId)
+        // ));
+        // await Promise.all(requests);
     }
     
     public async *[Symbol.asyncIterator](): AsyncIterableIterator<[K, V]> {
-        throw new Error("Method not implemented.");
+        return this._storage[Symbol.asyncIterator];
     }
 }

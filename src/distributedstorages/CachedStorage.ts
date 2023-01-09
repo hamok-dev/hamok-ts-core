@@ -1,6 +1,6 @@
 import { ClearEntriesNotification, Collections, createLogger, DeleteEntriesNotification, EvictEntriesNotification } from "@hamok-dev/common";
 import { Storage } from "../storages/Storage";
-import { StorageComlink } from "../storages/StorageComlink";
+import { StorageComlink, StorageComlinkConfig } from "../storages/StorageComlink";
 import { StorageEvents } from "../storages/StorageEvents";
 import { CacheMetrics, CacheMetricsImpl } from "./Cache";
 import { CachedStorageBuilder } from "./CachedStorageBuilder";
@@ -13,7 +13,7 @@ const logNotUsedAction = (context: string, obj: any) => {
     );
 }
 
-export type CachedStorageConfig = {
+export type CachedStorageConfig = StorageComlinkConfig & {
     maxKeys: number,
     maxValues: number,
 }

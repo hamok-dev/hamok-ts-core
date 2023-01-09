@@ -21,6 +21,11 @@ import { SegmentedStorage } from "./distributedstorages/SegmentedStorage";
 import { SegmentedStorageBuilder } from "./distributedstorages/SegmentedStorageBuilder";
 import { CachedStorageBuilder } from "./distributedstorages/CachedStorageBuilder";
 import { CachedStorage } from "./distributedstorages/CachedStorage";
+import { PubSubComlinkBuilder } from "./distributedevents/PubSubComlinkBuilder";
+import { PubSubBuilder } from "./distributedevents/PubSubBuilder";
+import { PubSub } from "./distributedevents/PubSub";
+import { ReplicatedStorage } from "./distributedstorages/ReplicatedStorage";
+import { ReplicatedStorageBuilder } from "./distributedstorages/ReplicatesStorageBuilder";
 
 
 const logger = createLogger("HamokGrid");
@@ -272,6 +277,17 @@ export class HamokGrid {
     public createCachedStorage<K, V>(baseStorage?: Storage<K, V>): CachedStorageBuilder<K, V> {
         return CachedStorage.builder<K, V>()
             .setBaseStorage(baseStorage)
+            .setHamokGrid(this);
+    }
+
+    public createReplicatedStorage<K, V>(baseStorage?: Storage<K, V>): ReplicatedStorageBuilder<K, V> {
+        return ReplicatedStorage.builder<K, V>()
+            .setBaseStorage(baseStorage)
+            .setHamokGrid(this);
+    }
+
+    public createPubSub<K, V>(): PubSubBuilder {
+        return PubSub.builder()
             .setHamokGrid(this);
     }
 

@@ -2,6 +2,7 @@ import { Collections, createLogger } from "@hamok-dev/common";
 import { Storage } from "../storages/Storage";
 import { StorageComlink, StorageComlinkConfig } from "../storages/StorageComlink";
 import { StorageEvents } from "../storages/StorageEvents";
+import { CompletablePromise } from "../utils/CompletablePromise";
 import { BatchIterator } from "./BatchIterator";
 import { SegmentedStorageBuilder } from "./SegmentedStorageBuilder";
 
@@ -34,19 +35,25 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
     private _segments: Map<K, string>;
     private _storage: Storage<K, V>;
     private _comlink: StorageComlink<K, V>;
+    private _standalone: boolean;
+    private _ongoingSync?: Promise<void>;
+
     public constructor(
         storage: Storage<K, V>,
         comlink: StorageComlink<K, V>,
         config: SegmentedStorageConfig
     ) {
         this.config = config;
+        this._standalone = true;
         this._storage = storage;
         this._segments = new Map<K, string>();
         this._comlink = comlink
             .onClearEntriesRequest(async request => {
-                const response = request.createResponse();
                 this._storage.clear();
-                this._comlink.sendClearEntriesResponse(response);
+                if (request.sourceEndpointId === this._comlink.localEndpointId) {
+                    const response = request.createResponse();
+                    this._comlink.sendClearEntriesResponse(response);
+                }
             })
             .onClearEntriesNotification(async notification => {
                 logNotUsedAction(`onClearEntriesNotification()`, notification);
@@ -73,38 +80,28 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
                     logger.warn(`Cannot perform delete operation without sourceId`);
                     return;
                 }
-                if (request.sourceEndpointId !== this._comlink.localEndpointId) {
-                    for (const key of request.keys) {
-                        this._segments.delete(key);
+                const deletedKeys = new Set<K>();
+                for (const key of request.keys) {
+                    if (this._segments.delete(key)) {
+                        deletedKeys.add(key);
                     }
-                    return;
                 }
-                const deletedKeys = await this._storage.deleteAll(request.keys)
-                const response = request.createResponse(
-                    deletedKeys
+                Collections.concatSet(
+                    deletedKeys,
+                    await this._storage.deleteAll(request.keys)
                 );
-                this._comlink.sendDeleteEntriesResponse(response);
+                if (request.sourceEndpointId === this._comlink.localEndpointId) {
+                    const response = request.createResponse(
+                        deletedKeys
+                    );
+                    this._comlink.sendDeleteEntriesResponse(response);
+                }
             })
             .onDeleteEntriesNotification(async notification => {
                 logNotUsedAction(`onDeleteEntriesNotification()`, notification);
             })
             .onRemoveEntriesRequest(async request => {
-                if (!request.sourceEndpointId) {
-                    logger.warn(`Cannot perform remove operation without sourceId`);
-                    return;
-                }
-                if (request.sourceEndpointId !== this._comlink.localEndpointId) {
-                    for (const key of request.keys) {
-                        this._segments.delete(key);
-                    }
-                    return;
-                }
-                const removedEntries = await this._storage.getAll(request.keys);
-                await this._storage.deleteAll(request.keys);
-                const response = request.createResponse(
-                    removedEntries
-                );
-                this._comlink.sendRemoveEntriesResponse(response);
+                logNotUsedAction(`onRemoveEntriesRequest()`, request);
             })
             .onRemoveEntriesNotification(async notification => {
                 logNotUsedAction(`onDeleteEntriesNotification()`, notification);
@@ -114,15 +111,14 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
                     logger.warn(`Cannot perform evict operation without sourceId`);
                     return;
                 }
-                if (request.sourceEndpointId !== this._comlink.localEndpointId) {
-                    for (const key of request.keys) {
-                        this._segments.delete(key);
-                    }
-                    return;
+                for (const key of request.keys) {
+                    this._segments.delete(key);
                 }
-                await this._storage.deleteAll(request.keys);
-                const response = request.createResponse();
-                this._comlink.sendEvictEntriesResponse(response);
+                await this._storage.evictAll(request.keys);
+                if (request.sourceEndpointId === this._comlink.localEndpointId) {
+                    const response = request.createResponse();
+                    this._comlink.sendEvictEntriesResponse(response);
+                }
             })
             .onEvictEntriesNotification(async notification => {
                 logNotUsedAction(`onDeleteEntriesNotification()`, notification);
@@ -132,38 +128,41 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
                     logger.warn(`Cannot perform insert operation without sourceId`);
                     return;
                 }
-                const keys = Collections.setFrom(request.entries.keys());
+                const existingKeys = new Set<K>();
+                const segmentKeys = new Map<string, K[]>();
+                const newEntries = new Map<K, V>();
+                for (const [key, value] of request.entries) {
+                    const remoteEndpointId = this._segments.get(key);
+                    if (!remoteEndpointId) {
+                        newEntries.set(key, value);
+                        continue;
+                    }
+                    let keys = segmentKeys.get(remoteEndpointId);
+                    if (!keys) {
+                        keys = [];
+                        segmentKeys.set(remoteEndpointId, keys);
+                    }
+                    keys.push(key);
+                    existingKeys.add(key);
+                }
                 if (request.sourceEndpointId !== this._comlink.localEndpointId) {
-                    for (const key of keys) {
-                        const remoteEndpointId = this._segments.get(key);
-                        if (remoteEndpointId) continue;
+                    for (const key of newEntries.keys()) {
                         this._segments.set(key, request.sourceEndpointId);
                     }
                     return;
                 }
-                const [segmentKeys, unmatched] = this._groupKeysBySegments(keys);
-                const fetchings: Promise<ReadonlyMap<K, V>>[] = [
-                    this._storage.getAll(keys)
-                ];
-                for (const [remoteEndpointId, existingRemoteKeys] of segmentKeys) {
-                    const fetchedEntries = this._comlink.requestGetEntries(
-                        existingRemoteKeys,
-                        Collections.setOf(remoteEndpointId)
-                    );
-                    fetchings.push(fetchedEntries);
+                const alreadyExistingEntries = 0 < existingKeys.size
+                    ? await this.getAll(existingKeys)
+                    : Collections.emptyMap<K, V>();
+
+                const response = request.createResponse(alreadyExistingEntries);
+                if (newEntries.size < 1) {
+                    this._comlink.sendInsertEntriesResponse(response);
+                    return;
                 }
-                const existingEntries = Collections.concatMaps<K, V>(
-                    new Map<K, V>(),
-                    ...(await Promise.all(fetchings))
-                );
-                const newEntries = Collections.collectEntriesByNotInKeys(
-                    request.entries,
-                    Collections.setFrom(existingEntries.keys())
-                );
                 // at this point we force the underlying storage to accept 
                 // all entries we considered at this point at this level as new
                 await this._storage.setAll(newEntries);
-                const response = request.createResponse(existingEntries);
                 this._comlink.sendInsertEntriesResponse(response);
             })
             .onInsertEntriesNotification(async notification => {
@@ -182,9 +181,13 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
                     if (!newValue) continue;
                     updatedEntries.set(key, newValue);
                 }
-                await this._storage.setAll(updatedEntries);
-                const response = request.createResponse(updatedEntries);
-                this._comlink.sendUpdateEntriesResponse(response);
+                if (0 < updatedEntries.size) {
+                    await this._storage.setAll(updatedEntries);
+                }
+                if (request.sourceEndpointId === this._comlink.localEndpointId) {
+                    const response = request.createResponse(updatedEntries);
+                    this._comlink.sendUpdateEntriesResponse(response);
+                }
             })
             .onUpdateEntriesNotification(async notification => {
                 logNotUsedAction(`onUpdateEntriesNotification()`, notification);
@@ -199,8 +202,28 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
                     this._segments.delete(key);
                 }
             })
-            .onChangedLeaderId(leaderId => {
-
+            .onChangedLeaderId(async leaderId => {
+                if (leaderId === undefined) {
+                    return;
+                }
+                const wasAlone = this._standalone;
+                if (!wasAlone) return;
+                if (this._ongoingSync) {
+                    await this._ongoingSync;
+                    return;
+                }
+                this._ongoingSync = new Promise(async resolve => {
+                    logger.trace(`Storage ${this.id} is joining to the grid`);
+                    const keys = await this._storage.keys();
+                    const entries = await this._storage.getAll(keys);
+                    await this._storage.clear();
+                    this._standalone = false;
+                    await this.insertAll(entries);
+                    resolve();
+                });
+                this._ongoingSync.finally(() => {
+                    this._ongoingSync = undefined;
+                });
             })
             .onStorageSyncRequested(async promise => {
                 const endpointIds: string[] = [];
@@ -237,6 +260,9 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
     }
 
     public async size(): Promise<number> {
+        if (this._standalone) {
+            return this._storage.size();
+        }
         const [localSize, remoteSize] = await Promise.all([
             this._storage.size(),
             this._comlink.requestGetSize()
@@ -245,11 +271,17 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
     }
 
     public async isEmpty(): Promise<boolean> {
+        if (this._standalone) {
+            return this._storage.isEmpty();
+        }
         if (await this._storage.isEmpty() === false) return false;
         return (await this._comlink.requestGetSize() === 0);
     }
 
     public async keys(): Promise<ReadonlySet<K>> {
+        if (this._standalone) {
+            return this._storage.keys();
+        }
         const [localKeys, remoteKeys] = await Promise.all([
             this._storage.keys(),
             this._comlink.requestGetKeys()
@@ -265,11 +297,16 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
     }
 
     public async clear(): Promise<void> {
-        this._storage.clear();
-        return this._comlink.requestClearEntries();
+        await this._storage.clear();
+        if (!this._standalone) {
+            return this._comlink.requestClearEntries();
+        }
     }
 
     public async get(key: K): Promise<V | undefined> {
+        if (this._standalone) {
+            return this._storage.get(key);
+        }
         const remoteEndpointId = this._segments.get(key);
         if (remoteEndpointId) {
             const remoteEntries = await this._comlink.requestGetEntries(
@@ -284,6 +321,9 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
     public async getAll(keys: ReadonlySet<K>): Promise<ReadonlyMap<K, V>> {
         if (keys.size < 1) {
             return Collections.emptyMap<K, V>();
+        }
+        if (this._standalone) {
+            return this._storage.getAll(keys);
         }
         const [segmentKeys, unmatched] = this._groupKeysBySegments(keys);
         const promises: Promise<ReadonlyMap<K, V>>[] = [];
@@ -308,29 +348,45 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
         );
     }
 
-    public async set(key: K, value: V, thisArg?: any): Promise<V | undefined> {
+    public async set(key: K, value: V): Promise<V | undefined> {
+        if (this._standalone) {
+            return this._storage.set(key, value);
+        }
         const updatedEntries = await this.setAll(Collections.mapOf([key, value]));
         return updatedEntries.get(key);
     }
 
     public async setAll(entries: ReadonlyMap<K, V>, thisArg?: any): Promise<ReadonlyMap<K, V>> {
-        const updatedEntries = await this._comlink.requestUpdateEntries(
-            entries,
-            Collections.setFrom(
-                this._comlink.remoteEndpointIds.keys(),
-                Collections.setOf(this._comlink.localEndpointId).keys()
-            )    
+        if (this._standalone) {
+            return this._storage.setAll(entries);
+        }
+        const updatedEntries = Collections.concatMaps(
+            new Map<K, V>(),
+            (await this.getAll(Collections.setFrom(entries.keys())))
         );
         const newEntries = Collections.collectEntriesByNotInKeys(
-            updatedEntries,
-            Collections.setFrom(entries.keys())
+            entries,
+            Collections.setFrom(updatedEntries.keys())
         );
+        const requests: Promise<ReadonlyMap<K, V>>[] = [];
+        if (0 < updatedEntries.size) {
+            Collections.splitMap<K, V>(
+                entries, 
+                Math.min(this.config.maxKeys, this.config.maxValues),
+                () => [entries]
+            ).map(batchEntries => this._comlink.requestUpdateEntries(
+                batchEntries,
+                Collections.setOf(this._comlink.localEndpointId)
+            )).forEach(request => requests.push(request));
+        }
+        await Promise.all(requests);
         if (newEntries.size < 1) {
             return updatedEntries;
         }
+        const alreadyExistingEntries = await this.insertAll(newEntries);
         const nextEntries = Collections.collectEntriesByKeys<K, V>(
             entries,
-            Collections.setFrom((await this.insertAll(newEntries)).keys())
+            Collections.setFrom(alreadyExistingEntries.keys())
         );
         if (nextEntries.size < 1) {
             return updatedEntries;
@@ -352,6 +408,9 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
     }
     
     public async insert(key: K, value: V): Promise<V | undefined> {
+        if (this._standalone) {
+            return this._storage.insert(key, value);
+        }
         const alreadyExistingEntries = await this.insertAll(
             Collections.mapOf([key, value])
         );
@@ -362,43 +421,45 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
         if (entries.size < 1) {
             return Collections.emptyMap<K, V>();
         }
-        return this._comlink.requestInsertEntries(entries);
-    }
-    
-    public async delete(key: K): Promise<boolean> {
-        const remoteEndpointId = this._segments.get(key);
-        if (remoteEndpointId) {
-            const deletedRemoteKeys = await this._comlink.requestDeleteEntries(
-                Collections.setOf(key)
-            );
-            return deletedRemoteKeys.has(key);
+        if (this._standalone) {
+            return this._storage.insertAll(entries);
         }
-        return this._storage.delete(key);
-    }
-    
-    public async deleteAll(keys: ReadonlySet<K>): Promise<ReadonlySet<K>> {
-        const [remoteSegments, shouldBeLocalKeys] = this._groupKeysBySegments(keys);
-        const promises: Promise<ReadonlySet<K>>[] = [];
-        for (const [remoteEndpointId, remoteKeys] of remoteSegments) {
-            const promise = this._comlink.requestDeleteEntries(
-                remoteKeys,
-                Collections.setOf(remoteEndpointId)
-            );
-            promises.push(promise);
-        }
-        if (0 < shouldBeLocalKeys.size) {
-            promises.push(this._storage.deleteAll(shouldBeLocalKeys));
-        }
-        if (promises.length < 1) {
-            return Collections.emptySet<K>();
-        }
-        return Collections.concatSet<K>(
-            new Set<K>(),
-            ...(await Promise.all(promises))
+        return this._comlink.requestInsertEntries(
+            entries,
+            Collections.setOf(this._comlink.localEndpointId)
         );
     }
     
+    public async delete(key: K): Promise<boolean> {
+        if (this._standalone) {
+            return this._storage.delete(key);
+        }
+        const deletedKeys = await this._comlink.requestDeleteEntries(
+            Collections.setOf(key),
+            Collections.setOf(this._comlink.localEndpointId)
+        );
+        return deletedKeys.has(key);
+    }
+    
+    public async deleteAll(keys: ReadonlySet<K>): Promise<ReadonlySet<K>> {
+        if (keys.size < 1) {
+            return Collections.emptySet<K>();
+        }
+        if (this._standalone) {
+            return this._storage.deleteAll(keys);
+        }
+
+        const result = await this._comlink.requestRemoveEntries(
+            keys,
+            Collections.setOf(this._comlink.localEndpointId)
+        )
+        return Collections.setFrom(result.keys());
+    }
+    
     public async evict(key: K): Promise<void> {
+        if (this._standalone) {
+            return this._storage.evict(key);
+        }
         const remoteEndpointId = this._segments.get(key);
         if (remoteEndpointId) {
             await this._comlink.requestEvictEntries(
@@ -410,22 +471,16 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
     }
     
     public async evictAll(keys: ReadonlySet<K>): Promise<void> {
-        const [remoteSegments, shouldBeLocalKeys] = this._groupKeysBySegments(keys);
-        const promises: Promise<void>[] = [];
-        for (const [remoteEndpointId, remoteKeys] of remoteSegments) {
-            const promise = this._comlink.requestEvictEntries(
-                remoteKeys,
-                Collections.setOf(remoteEndpointId)
-            );
-            promises.push(promise);
-        }
-        if (0 < shouldBeLocalKeys.size) {
-            promises.push(this._storage.evictAll(shouldBeLocalKeys));
-        }
-        if (promises.length < 1) {
+        if (keys.size < 1) {
             return;
         }
-        await Promise.all(promises);
+        if (this._standalone) {
+            return this._storage.evictAll(keys);
+        }
+        return this._comlink.requestEvictEntries(
+            keys,
+            Collections.setOf(this._comlink.localEndpointId)
+        );
     }
     
     public async restore(key: K, value: V): Promise<void> {
@@ -437,6 +492,9 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
     }
     
     public async *[Symbol.asyncIterator](): AsyncIterableIterator<[K, V]> {
+        if (this._standalone) {
+            return this._storage[Symbol.asyncIterator];
+        }
         const keys = await this.keys();
         const batchIterator = new BatchIterator(
             keys,

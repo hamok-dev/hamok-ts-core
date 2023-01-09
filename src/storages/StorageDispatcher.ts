@@ -30,7 +30,8 @@ import {
 } from "@hamok-dev/common"
 import { GetSizeRequest, GetSizeResponse } from "@hamok-dev/common/lib/messagetypes/GetSize";
 import { EventEmitter } from "ws";
-import { ResponseChunker, StorageComlinkResponseChunkerImpl } from "../messages/ResponseChunker";
+import { ResponseChunker } from "../messages/ResponseChunker";
+import { ResponseChunkerImpl } from "../messages/ResponseChunkerImpl";
 
 const logger = createLogger("StorageDispatcher");
 
@@ -217,7 +218,7 @@ export class StorageDispatcher<K, V> implements StorageInboundEvents<K, V>, Stor
         responseChunker?: ResponseChunker
     ) {
         this._codec = codec;
-        this._responseChunker = responseChunker ?? StorageComlinkResponseChunkerImpl.createPassiveChunker();
+        this._responseChunker = responseChunker ?? ResponseChunkerImpl.createPassiveChunker();
         this._dispatcher = this._createMessageDispatcher();
     }
 

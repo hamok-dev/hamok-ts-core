@@ -1,6 +1,7 @@
 import { Timestamp } from "@bufbuild/protobuf";
 import { createLogger, PublishCustomDataNotification } from "@hamok-dev/common";
 import { EventEmitter } from "ws";
+import { PubSubBuilder } from "./PubSubBuilder";
 import { PubSubComlink, PubSubComlinkConfig } from "./PubSubComlink";
 
 const logger = createLogger("PubSub");
@@ -25,8 +26,12 @@ export type PubSubConfig = PubSubComlinkConfig & {
  */
 
 export class PubSub {
+    public static builder(): PubSubBuilder {
+        return new PubSubBuilder();
+    }
     
-    public config: PubSubConfig;
+    public readonly config: PubSubConfig;
+    private _standalone: boolean;
     private _subscriptions: Map<string, Set<string>>;
     private _comlink: PubSubComlink;
     private _emitter: EventEmitter;
@@ -36,6 +41,7 @@ export class PubSub {
         config: PubSubConfig
     ) {
         this.config = config;
+        this._standalone = true;
         this._subscriptions = new Map<string, Set<string>>();
         this._comlink = comlink;
         this._emitter = new EventEmitter();
@@ -44,15 +50,7 @@ export class PubSub {
                 if (!request.sourceEndpointId) {
                     return;
                 }
-                let remoteEndpointIds = this._subscriptions.get(request.event);
-                if (!remoteEndpointIds) {
-                    remoteEndpointIds = new Set<string>();
-                    this._subscriptions.set(request.event, remoteEndpointIds);
-                }
-                if (!remoteEndpointIds.has(request.sourceEndpointId)) {
-                    remoteEndpointIds.add(request.sourceEndpointId);
-                    this._emitter.emit(SUBSCRIPTION_ADDED_EVENT_NAME, remoteEndpointIds, request.event);
-                }
+                this._addSubscription(request.event, request.sourceEndpointId);
                 if (request.sourceEndpointId === this._comlink.localEndpointId) {
                     // resolve the local promise hanging here
                     const response = request.createResponse(true);
@@ -63,33 +61,13 @@ export class PubSub {
                 if (!notification.sourceEndpointId) {
                     return;
                 }
-                let remoteEndpointIds = this._subscriptions.get(notification.event);
-                if (!remoteEndpointIds) {
-                    remoteEndpointIds = new Set<string>();
-                    this._subscriptions.set(notification.event, remoteEndpointIds);
-                }
-                if (!remoteEndpointIds.has(notification.sourceEndpointId)) {
-                    remoteEndpointIds.add(notification.sourceEndpointId);
-                    this._emitter.emit(SUBSCRIPTION_ADDED_EVENT_NAME, remoteEndpointIds, notification.event);
-                }
+                this._addSubscription(notification.event, notification.sourceEndpointId);
             })
             .onRemoveSubscriptionRequest(async request => {
                 if (!request.sourceEndpointId) {
                     return;
                 }
-                const remoteEndpointIds = this._subscriptions.get(request.event);
-                if (!remoteEndpointIds) {
-                    this._comlink.sendRemoveSubscriptionResponse(
-                        request.createResponse(true)
-                    );
-                    return;
-                }
-                if (remoteEndpointIds.delete(request.sourceEndpointId)) {
-                    this._emitter.emit(SUBSCRIPTION_REMOVED_EVENT_NAME, remoteEndpointIds, request.event);
-                }
-                if (remoteEndpointIds.size < 1) {
-                    this._subscriptions.delete(request.event);
-                }
+                this._removeSubscription(request.event, request.sourceEndpointId);
                 if (request.sourceEndpointId === this._comlink.localEndpointId) {
                     // resolve the response hanging here
                     const response = request.createResponse(true);
@@ -100,16 +78,7 @@ export class PubSub {
                 if (!notification.sourceEndpointId) {
                     return;
                 }
-                const remoteEndpointIds = this._subscriptions.get(notification.event);
-                if (!remoteEndpointIds) {
-                    return;
-                }
-                if (remoteEndpointIds.delete(notification.sourceEndpointId)) {
-                    this._emitter.emit(SUBSCRIPTION_REMOVED_EVENT_NAME, remoteEndpointIds, notification.event);
-                }
-                if (remoteEndpointIds.size < 1) {
-                    this._subscriptions.delete(notification.event);
-                }
+                this._removeSubscription(notification.event, notification.sourceEndpointId);
             })
             .onPublishCustomDataRequest(async request => {
                 const hasTopic = this._subscriptions.has(request.event);
@@ -160,26 +129,38 @@ export class PubSub {
         return this;
     }
 
-    public async subscribe(topic: string, listener: CustomDataListener): Promise<void> {
-        this._emitter.on(topic, listener);
-        if (this._subscriptions.has(topic)) {
+    public async subscribe(event: string, listener: CustomDataListener): Promise<void> {
+        this._emitter.on(event, listener);
+        if (this._standalone) {
+            this._removeSubscription(event, this._comlink.localEndpointId);
+            return;
+        }
+        if (this._subscriptions.has(event)) {
             // already subscribed
             return;
         }
-        await this._comlink.requestAddSubscription(topic);
+        await this._comlink.requestAddSubscription(event);
     }
 
-    public async unsubscribe(topic: string, listener: CustomDataListener): Promise<void> {
-        this._emitter.off(topic, listener);
-        if (0 < this._emitter.listenerCount(topic)) {
+    public async unsubscribe(event: string, listener: CustomDataListener): Promise<void> {
+        this._emitter.off(event, listener);
+        if (0 < this._emitter.listenerCount(event)) {
             return;
         }
-        await this._comlink.requestRemoveSubscription(topic);
+        if (this._standalone) {
+            this._removeSubscription(event, this._comlink.localEndpointId);
+            return;
+        }
+        await this._comlink.requestRemoveSubscription(event);
     }
 
     public async publish(topic: string, customData: Uint8Array): Promise<void> {
         const endpointIds = this._subscriptions.get(topic);
         if (!endpointIds) {
+            return;
+        }
+        if (this._standalone) {
+            this._emitter.emit(topic, customData);
             return;
         }
         const remoteEndpointIds = this._allButLocalEndpoint(endpointIds, () => {
@@ -200,6 +181,10 @@ export class PubSub {
         if (!endpointIds) {
             return;
         }
+        if (this._standalone) {
+            this._emitter.emit(topic, customData);
+            return;
+        }
         const remoteEndpointIds = this._allButLocalEndpoint(endpointIds, () => {
             this._emitter.emit(topic, customData);
         });
@@ -212,6 +197,31 @@ export class PubSub {
                 remoteEndpointId
             );
             this._comlink.sendPublishCustomDataNotification(notification);
+        }
+    }
+
+    private _addSubscription(event: string, endpointId: string) {
+        let endpointIds = this._subscriptions.get(event);
+        if (!endpointIds) {
+            endpointIds = new Set<string>();
+            this._subscriptions.set(event, endpointIds);
+        }
+        if (!endpointIds.has(endpointId)) {
+            endpointIds.add(endpointId);
+            this._emitter.emit(SUBSCRIPTION_ADDED_EVENT_NAME, endpointIds, event);
+        }
+    }
+
+    private _removeSubscription(event: string, endpointId: string) {
+        const remoteEndpointIds = this._subscriptions.get(event);
+        if (!remoteEndpointIds) {
+            return;
+        }
+        if (remoteEndpointIds.delete(endpointId)) {
+            this._emitter.emit(SUBSCRIPTION_REMOVED_EVENT_NAME, remoteEndpointIds, event);
+        }
+        if (remoteEndpointIds.size < 1) {
+            this._subscriptions.delete(event);
         }
     }
 

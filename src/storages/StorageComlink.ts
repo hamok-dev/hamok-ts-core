@@ -40,7 +40,7 @@ import { ResponseChunker } from "../messages/ResponseChunker";
 import { EventEmitter } from "ws";
 import { RemoteEndpointStateChangedListener } from "../raccoons/RemotePeers";
 import { CompletablePromise } from "../utils/CompletablePromise";
-import { OngoingRequestIds } from "./OngoingRequestIds";
+import { OngoingRequestIds } from "../messages/OngoingRequestIds";
 import { MessageEmitter } from "../messages/MessageEmitter";
 
 const logger = createLogger("StorageComlink");
