@@ -16,8 +16,18 @@ const logNotUsedAction = (context: string, obj: any) => {
 
 
 export type SegmentedStorageConfig = StorageComlinkConfig & {
-    maxKeys: number;
-    maxValues: number;
+    /**
+     * The maximum number of keys can be put into one outgoing request / response
+     */
+    maxKeys: number,
+    /**
+     * The maximum number of values can be put into one outgoing request / response
+     */
+    maxValues: number,
+    /**
+     * The maximum recursion depth for certain actions (set, setAll) 
+     * allowed without throwing an exception
+     */
     maxRecursionRetry: number;
 }
 

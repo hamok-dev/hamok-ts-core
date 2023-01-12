@@ -69,11 +69,10 @@ export class LeaderState extends RaccoonState {
         const changedAfter = remotePeers.changed;
         if (changedBefore == changedAfter) {
             // if nothing has changed we just acknoledge the hello
-            this._sendEndpointStateNotification(new Set<string>(remotePeerId), this._activeRemotePeerIds);
+            this._sendEndpointStateNotification(new Set<string>([remotePeerId]), this._activeRemotePeerIds);
             return;
         }
         this._updateActiveRemotePeerIds();
-
         // otherwise we send the new situation to all peers
         // and request the new peer to perform a sync
         this._sendEndpointStateNotification(remotePeers.getRemotePeerIds(), this._activeRemotePeerIds);
@@ -330,6 +329,7 @@ export class LeaderState extends RaccoonState {
     private _sendEndpointStateNotification(targetRemotePeerIds: ReadonlySet<string>, activeRemoteEndpointIds: ReadonlySet<string>) {
         const props = this.syncedProperties;
         const logs = this.logs;
+            // logger.info(`_sendEndpointStateNotification: targetRemotePeerIds`, targetRemotePeerIds, activeRemoteEndpointIds);
         for (const remotePeerId of targetRemotePeerIds) {
             const notification = new EndpointStatesNotification(
                 this.getLocalPeerId(),

@@ -3,11 +3,12 @@ import { createLogger, Message } from "@hamok-dev/common";
 const logger = createLogger("PendingResponse");
 
 export class PendingResponse {
+    public requestId: string;
     private _messages = new Map<number, Message>();
     private _endSeq = -1;
     private _result?: Message;
-    public constructor() {
-
+    public constructor(requestId: string) {
+        this.requestId = requestId;
     }
 
     public accept(message: Message) {

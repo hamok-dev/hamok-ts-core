@@ -14,8 +14,14 @@ const logNotUsedAction = (context: string, obj: any) => {
 }
 
 export type ReplicatedStorageConfig = StorageComlinkConfig & {
-    maxKeys: number;
-    maxValues: number;
+    /**
+     * The maximum number of keys can be put into one outgoing request / response
+     */
+    maxKeys: number,
+    /**
+     * The maximum number of values can be put into one outgoing request / response
+     */
+    maxValues: number,
 }
 
 /**
@@ -73,7 +79,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
             })
             .onDeleteEntriesRequest(async request => {
                 const deletedKeys = await this._storage.deleteAll(request.keys);
-                if (request.requestId === this._comlink.localEndpointId) {
+                if (request.sourceEndpointId === this._comlink.localEndpointId) {
                     const response = request.createResponse(deletedKeys);
                     this._comlink.sendDeleteEntriesResponse(response);
                 }
@@ -98,7 +104,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
             })
             .onEvictEntriesRequest(async request => {
                 await this._storage.evictAll(request.keys);
-                if (request.requestId === this._comlink.localEndpointId) {
+                if (request.sourceEndpointId === this._comlink.localEndpointId) {
                     const response = request.createResponse();
                     this._comlink.sendEvictEntriesResponse(response);
                 }
@@ -111,7 +117,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
             })
             .onInsertEntriesRequest(async request => {
                 const alreadyExistingEntries = await this._storage.insertAll(request.entries);
-                if (request.requestId === this._comlink.localEndpointId) {
+                if (request.sourceEndpointId === this._comlink.localEndpointId) {
                     const response = request.createResponse(alreadyExistingEntries);
                     this._comlink.sendInsertEntriesResponse(response);
                 }
@@ -124,7 +130,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
             })
             .onUpdateEntriesRequest(async request => {
                 const updatedEntries = await this._storage.setAll(request.entries);
-                if (request.requestId === this._comlink.localEndpointId) {
+                if (request.sourceEndpointId === this._comlink.localEndpointId) {
                     const response = request.createResponse(updatedEntries);
                     this._comlink.sendUpdateEntriesResponse(response);
                 }

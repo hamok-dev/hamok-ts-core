@@ -96,7 +96,8 @@ export class HamokGrid {
     }
 
     private readonly _dispatcher
-    private _ongoingStart?: Promise<void>;
+    private _ongoingPromiseLeader?: Promise<string>;
+    private _ongoingPromiseCommitSync?: Promise<number>;
     private _ongoingStorageSync?: Promise<boolean>;
     private _transport: GridTransportAbstract;
     private _raccoon: Raccoon;
@@ -110,7 +111,6 @@ export class HamokGrid {
     ) {
         this.config = config;
         this._raccoon = raccoon;
-        this._transport = this._createTransport();
         this._dispatcher = this._createGridDispatcher()
             .onStorageSyncRequest(request => {
                 if (this.localEndpointId !== this.leaderId) {
@@ -141,26 +141,38 @@ export class HamokGrid {
                     this.leaderId,
                 );
                 this._dispatcher.sendSubmitMessageResponse(response);
-            })
+            });
             // .onSubmitMessageRequest(request => {
                 
             // })
+        this._transport = this._createTransport();
         this._raccoon.onOutboundMessage(message => {
             message.protocol = MessageProtocol.RAFT_COMMUNICATION_PROTOCOL;
+            // console.warn("message", message);
             this._send(message);
         }).onStorageSyncRequested(promise => {
+            logger.info("StorageSync is requested");
             this.sync(120 * 1000).catch(err => {
                 logger.warn(`onStorageSyncRequested(): Synchronization failed`, err);
-            });
-        }).onChangedLeaderId(({ actualLeaderId }) => {
+            })
+            .then(() => promise.resolve())
+            .catch(err => promise.reject(err));
+
+        }).onChangedLeaderId(({ prevLeaderId, actualLeaderId }) => {
             if (actualLeaderId === undefined) {
                 return;
             }
-            this.sync(120 * 1000).catch(err => {
-                logger.warn(`onChangedLeaderId(): Synchronization failed`, err);
-            });
+            logger.info(`onChangedLeaderId(): Leader is changed from ${prevLeaderId} to ${actualLeaderId}`);
+            if (actualLeaderId !== this.localEndpointId) {
+                this.sync(120 * 1000).catch(err => {
+                    logger.warn(`onChangedLeaderId(): Synchronization failed`, err);
+                });
+                logger.info(`onChangedLeaderId(): Sync is finished`);
+            }
         }).onCommittedEntry(message => {
-            this._transport.receive(message);
+            // logger.info(`Received committed message`, message);
+            // this._transport.receive(message);
+            this._dispatch(message);
         })
     }
 
@@ -180,31 +192,11 @@ export class HamokGrid {
         return this._raccoon.remoteEndpointIds;
     }
 
-    public start(): Promise<void> {
-        if (this._ongoingStart) {
-            return this._ongoingStart;
+    public start(): void {
+        if (this._raccoon.started) {
+            return;
         }
-        this._ongoingStart = new Promise((resolve, reject) => {
-            if (!this._raccoon.started) {
-                this._raccoon.start();
-            }
-            if (this.leaderId) {
-                resolve();
-                return;
-            }
-            const listener = (event: ChangedLeaderEvent) => {
-                if (!event.actualLeaderId) {
-                    return;
-                }
-                this._raccoon.offChangedLeaderId(listener);
-                resolve();
-            };
-            this._raccoon.onChangedLeaderId(listener);
-        });
-        this._ongoingStart.finally(() => {
-            this._ongoingStart = undefined;
-        })
-        return this._ongoingStart;
+        this._raccoon.start();
     }
 
     public stop() {
@@ -212,6 +204,66 @@ export class HamokGrid {
             return;
         }
         this._raccoon.stop();
+    }
+
+    public async promiseLeader(): Promise<string> {
+        if (this._ongoingPromiseLeader) {
+            return this._ongoingPromiseLeader;
+        }
+        this._ongoingPromiseLeader = new Promise<string>((resolve, reject) => {
+            if (this.leaderId) {
+                resolve(this.leaderId);
+                return;
+            }
+            const listener = (event: ChangedLeaderEvent) => {
+                if (!event.actualLeaderId) {
+                    return;
+                }
+                this._raccoon.offChangedLeaderId(listener);
+                resolve(event.actualLeaderId);
+            };
+            this._raccoon.onChangedLeaderId(listener);
+        });
+        this._ongoingPromiseLeader.finally(() => {
+            this._ongoingPromiseLeader = undefined;
+        })
+        return this._ongoingPromiseLeader;
+    }
+
+    public async promiseCommitSync(timeoutInMs?: number): Promise<number> {
+        if (this._ongoingPromiseCommitSync) {
+            return this._ongoingPromiseCommitSync;
+        }
+        this._ongoingPromiseCommitSync = new Promise<number>(async (resolve, reject) => {
+            const leaderId = await this.promiseLeader();
+            const response = await this._dispatcher.requestStorageSync(new StorageSyncRequest(
+                uuid(),
+                leaderId,
+                this.localEndpointId
+            ));
+            if (response.commitIndex === undefined) {
+                reject(`Cannot sync without commitIndex`);
+                return;
+            }
+            const responseCommitIndex = response.commitIndex;
+            const started = Date.now();
+            const timer = setInterval(() => {
+                const actualCommitIndex = this._raccoon.logs.commitIndex;
+                if (actualCommitIndex < responseCommitIndex) {
+                    if (timeoutInMs && timeoutInMs <= Date.now() - started) {
+                        clearInterval(timer);
+                        reject(`Timeout`);
+                    }
+                    return;
+                }
+                clearInterval(timer);
+                resolve(actualCommitIndex);
+            }, 500);
+        });
+        this._ongoingPromiseCommitSync.finally(() => {
+            this._ongoingPromiseCommitSync = undefined;
+        });
+        return this._ongoingPromiseCommitSync;
     }
 
     public onRemoteEndpointJoined(listener: EndpointIdListener): this {
@@ -245,10 +297,16 @@ export class HamokGrid {
     }
 
     public addRemoteEndpointId(remoteEndpointId: string): void {
+        if (typeof remoteEndpointId !== "string") {
+            throw new Error(`HamokGrid::addRemoteEndpointId(): Only string typed remote endpoint id can be added`);
+        }
         this._raccoon.addRemotePeerId(remoteEndpointId);
     }
 
     public removeRemoteEndpointId(remoteEndpointId: string): void {
+        if (typeof remoteEndpointId !== "string") {
+            throw new Error(`HamokGrid::removeRemoteEndpointId(): Only string typed remote endpoint id can be added`);
+        }
         this._raccoon.removeRemotePeerId(remoteEndpointId);
     }
 
@@ -309,58 +367,82 @@ export class HamokGrid {
 
     private _send(message: Message): void {
         message.sourceId = this._raccoon.localPeerId;
+        // logger.info(`Sending message`, message);
         this._transport.send(message);
     }
 
+    private _dispatch(message: Message) {
+        // logger.info(`Received message`, message);
+        switch(message.protocol) {
+            case undefined:
+            case MessageProtocol.RAFT_COMMUNICATION_PROTOCOL:
+                this._raccoon.dispatchInboundMessage(message);
+                break;
+            case undefined:
+            case MessageProtocol.GRID_COMMUNICATION_PROTOCOL:
+                this._dispatcher.receive(message);
+                break;
+            case MessageProtocol.STORAGE_COMMUNICATION_PROTOCOL:
+                this._dispatchToStorage(message);
+                break;
+            case MessageProtocol.PUBSUB_COMMUNICATION_PROTOCOL:
+                this._dispatchToPubSub(message);
+                return;
+        }
+    }
+
+    private _dispatchToStorage(message: Message) {
+        if (message.storageId === undefined) {
+            logger.warn(`_dispatchToStorage(): Cannot dispatch a message does not have a storageId`, message);
+            return;
+        }
+        const storageLink = this._storageLinks.get(message.storageId);
+        if (!storageLink) {
+            logger.warn(`Cannot find a storage ${message.storageId} for message`, message);
+            return;
+        }
+        storageLink.receive(message);
+    }
+
+    private _dispatchToPubSub(message: Message) {
+        if (message.storageId === undefined) {
+            logger.warn(`_dispatchToPubSub(): Cannot dispatch a message does not have a topic`, message);
+            return;
+        }
+        const pubSubLink = this._pubsubLinks.get(message.storageId);
+        if (!pubSubLink) {
+            logger.warn(`Cannot find a PubSub ${message.storageId} for message`, message);
+            return;
+        }
+        pubSubLink.receive(message);
+    }
+
     private _createTransport(): GridTransportAbstract {
-        const gridDispatcher = this._dispatcher;
-        const raccoon = this._raccoon;
-        const storageLinks = this._storageLinks;
-        const pubSubLinks = this._pubsubLinks;
+        const grid = this;
+        const localEndpointId = grid.localEndpointId;
         return new class extends GridTransportAbstract {
             public receive(message: Message): void {
-                switch(message.protocol) {
-                    case undefined:
-                    case MessageProtocol.RAFT_COMMUNICATION_PROTOCOL:
-                        raccoon.dispatchInboundMessage(message);
-                        break;
-                    case undefined:
-                    case MessageProtocol.GRID_COMMUNICATION_PROTOCOL:
-                        gridDispatcher.receive(message);
-                        break;
-                    case MessageProtocol.STORAGE_COMMUNICATION_PROTOCOL:
-                        this._dispatchToStorage(message);
-                        break;
-                    case MessageProtocol.PUBSUB_COMMUNICATION_PROTOCOL:
-                        this._dispatchToPubSub(message);
+                if (message?.constructor !== Message) {
+                    if (false === message instanceof Message) {
+                        logger.warn(`receive(): Not message object received`);
                         return;
+                    }
                 }
+                if (message.destinationId && message.destinationId !== localEndpointId) {
+                    logger.warn(`Discarding message destination id (${message.destinationId}) is different from the local endpoint ${localEndpointId}`, message.type);
+                    return;
+                }
+                grid._dispatch(message);
             }
 
-            private _dispatchToStorage(message: Message) {
-                if (message.storageId === undefined) {
-                    logger.warn(`_dispatchToStorage(): Cannot dispatch a message does not have a storageId`, message);
-                    return;
+            protected canSend(message: Message): boolean {
+                // logger.info(`Can send message ${message.type} from ${message.sourceId} to ${message.destinationId}?`);
+                if (message.destinationId === localEndpointId) {
+                    // console.warn(`Sent it to myself`);
+                    this.receive(message);
+                    return false;
                 }
-                const storageLink = storageLinks.get(message.storageId);
-                if (!storageLink) {
-                    logger.warn(`Cannot find a storage ${message.storageId} for message`, message);
-                    return;
-                }
-                storageLink.receive(message);
-            }
-
-            private _dispatchToPubSub(message: Message) {
-                if (message.storageId === undefined) {
-                    logger.warn(`_dispatchToPubSub(): Cannot dispatch a message does not have a topic`, message);
-                    return;
-                }
-                const pubSubLink = pubSubLinks.get(message.storageId);
-                if (!pubSubLink) {
-                    logger.warn(`Cannot find a PubSub ${message.storageId} for message`, message);
-                    return;
-                }
-                pubSubLink.receive(message);
+                return true;
             }
         };
     }
@@ -369,7 +451,7 @@ export class HamokGrid {
         const grid = this;
         const result = new class extends GridDispatcher {
             protected send(message: Message): void {
-                message.protocol = MessageProtocol.STORAGE_COMMUNICATION_PROTOCOL;
+                message.protocol = MessageProtocol.GRID_COMMUNICATION_PROTOCOL;
                 grid._send(message);
             }
         }
@@ -403,7 +485,7 @@ export class HamokGrid {
                     return;
                 }
                 result.reject(new Error(`Timeout`));
-            })
+            }, timeoutInMs);
         }
         if (!this._ongoingStorageSync) {
             this._ongoingStorageSync = new Promise<boolean>(async (resolve, reject) => {
@@ -413,9 +495,13 @@ export class HamokGrid {
                     this.localEndpointId,
                 )).catch(err => {
                     logger.warn("sync(): Error occurred while executing storage sync", err);
+                    reject(err);
                     return undefined;
                 });
-                if (!storageSyncResponse || storageSyncResponse.commitIndex === undefined || !storageSyncResponse.numberOfLogs) {
+                if (!storageSyncResponse || 
+                    storageSyncResponse.commitIndex === undefined || 
+                    storageSyncResponse.numberOfLogs === undefined
+                ) {
                     logger.warn(`No commitIndex or numberOfLogs in storage sync response`, storageSyncResponse);
                     resolve(false);
                     return;
@@ -427,8 +513,8 @@ export class HamokGrid {
                         the leader commitIndex is ${storageSyncResponse.commitIndex} and the number of logs the 
                         leader has ${storageSyncResponse.numberOfLogs}, should be sufficient`
                     );
-        
-                    return true;
+                    resolve(true);
+                    return;
                 }
                 this._executeSync(storageSyncResponse.commitIndex, false)
                     .then(resolve)

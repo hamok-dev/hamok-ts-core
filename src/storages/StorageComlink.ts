@@ -558,10 +558,10 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
         );
         const result = new Set<K>();
         (await this._request(request, targetEndpointIds))
-            .map(response => this._codec.decodeGetKeysResponse(response))
+            .map(response => this._codec.decodeDeleteEntriesResponse(response))
             .forEach(response => Collections.concatSet(
                 result,
-                response.keys
+                response.deletedKeys
             ));
         return result;
     }
@@ -731,13 +731,28 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
         this._dispatchRequest(message, destinationEndpointIds);
         const tried = attempt ?? 0;
         return pendingRequest.then(responses => {
+            this._purgeResponseForRequest(message.requestId!);
+            this._pendingRequests.delete(pendingRequest.id);
             return responses;
         }).catch(err => {
+            logger.warn(`Error occurred while waiting for request ${pendingRequest}, messageType: ${message.type}. Tried: ${tried}`, err);
+            this._purgeResponseForRequest(message.requestId!);
+            this._pendingRequests.delete(pendingRequest.id);
             if (tried < 3) {
                 return this._request(message, targetEndpointIds, tried + 1);
             }
             throw err;
         });
+    }
+
+    private _purgeResponseForRequest(requestId: string) {
+        const pendingResponseKeys: string[] = [];
+        for (const [key, pendingResponse] of this._pendingResponses) {
+            if (pendingResponse.requestId === requestId) {
+                pendingResponseKeys.push(key);
+            }
+        }
+        pendingResponseKeys.forEach(pendingResponseKey => this._pendingResponses.delete(pendingResponseKey));
     }
 
     protected abstract defaultResolvingEndpointIds(): ReadonlySet<string>;
@@ -783,6 +798,7 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
 
     private _dispatchResponse(message: Message, targetEndpointIds?: ReadonlySet<string>): void {
         for (const chunk of this._responseChunker.apply(message)) {
+            // logger.info("Sending response message", message.type);
             this._dispatch(
                 chunk,
                 this.sendResponse.bind(this),
@@ -812,17 +828,27 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
     }
 
     private _processResponse(message: Message): void {
+        if (!message.requestId) {
+            logger.warn(`_processResponse(): Message does not have a requestId`, message);
+            return;
+        }
         const chunkedResponse = message.sequence !== undefined && message.lastMessage !== undefined;
         const onlyOneChunkExists = message.sequence === 0 && message.lastMessage === true;
+        // console.warn("_responseReceived ", message);
         if (chunkedResponse && !onlyOneChunkExists) {
             const pendingResponseId = `${message.sourceId}#${message.requestId}`;
             let pendingResponse = this._pendingResponses.get(pendingResponseId);
             if (!pendingResponse) {
-                pendingResponse = new PendingResponse();
+                pendingResponse = new PendingResponse(message.requestId);
                 this._pendingResponses.set(pendingResponseId, pendingResponse);
             }
             pendingResponse.accept(message);
             if (!pendingResponse.isReady) {
+                const pendingRequest = this._pendingRequests.get(message.requestId ?? "notExists");
+                // let's postpone the timeout if we knoe responses are coming
+                if (pendingRequest) {
+                    pendingRequest.postponeTimeout();
+                }
                 return;
             }
             if (!this._pendingResponses.delete(pendingResponseId)) {
@@ -889,8 +915,8 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
 
             protected processGetEntriesRequest(message: Message): void {
                 try {
-                    const notification = codec.decodeGetEntriesRequest(message);
-                    emitter.emit(GET_ENTRIES_REQUEST, notification);
+                    const request = codec.decodeGetEntriesRequest(message);
+                    emitter.emit(GET_ENTRIES_REQUEST, request);
                 } catch (err) {
                     logger.warn("dispatcher::processGetEntriesRequest(): Error occurred while decoding message", err)
                 }
@@ -1044,7 +1070,7 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
             }
 
             protected processMessage(message: Message): void {
-                logger.debug(`processMessage(): message type ${message.type} is not dispatched`);
+                logger.warn(`processMessage(): message type ${message.type} is not dispatched`);
             }
 
             protected processUnrecognizedMessage(message: Message): void {
@@ -1056,6 +1082,6 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
 
     private _getOnEvent(blockingListener: boolean) {
         if (blockingListener) return this._emitter.addBlockingListener.bind(this._emitter);
-        else return this._emitter.addListener.bind(this);
+        else return this._emitter.addListener.bind(this._emitter);
     }
 }

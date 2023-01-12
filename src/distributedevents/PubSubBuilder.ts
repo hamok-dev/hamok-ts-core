@@ -1,14 +1,15 @@
-import { Message, MessageProtocol } from "@hamok-dev/common";
+import { createLogger, Message, MessageProtocol } from "@hamok-dev/common";
 import { HamokGrid } from "../HamokGrid";
 import { PubSub, PubSubConfig } from "./PubSub";
-import { PubSubComlinkConfig } from "./PubSubComlink";
 import { v4 as uuid } from "uuid";
+import { ResponseChunkerImpl } from "../messages/ResponseChunkerImpl";
 
+const logger = createLogger("PubSubBuilder");
 
 export class PubSubBuilder {
     private readonly _generatedTopic: string;
     private readonly _generatedRequestTimeoutInMs: number;
-    private _config: PubSubComlinkConfig;
+    private _config: PubSubConfig;
     private _grid?: HamokGrid;
 
     public constructor() {
@@ -19,6 +20,8 @@ export class PubSubBuilder {
             requestTimeoutInMs: this._generatedRequestTimeoutInMs,
             throwExceptionOnTimeout: true,
             neededResponse: 0,
+            maxKeys: 0,
+            maxValues: 0,
         }
     }
 
@@ -34,15 +37,21 @@ export class PubSubBuilder {
     
     public build(): PubSub {
         if (!this._grid) {
-            throw new Error(`Cannot build CachedStorage without a given HamokGrid`);
+            throw new Error(`Cannot build PubSub without a given HamokGrid`);
+        }
+        if (this._generatedTopic === this._config.topic) {
+            throw new Error(`Cannot build a PubSub without a given topic`);
         }
         if (this._generatedRequestTimeoutInMs === this._config.requestTimeoutInMs) {
             this._config.requestTimeoutInMs = this._grid.config.requestTimeoutInMs;
         }
         if (0 < this._config.neededResponse) {
-            throw new Error(`CachedStorage must be built with 0 or undefined neededResponse config option as it must have response from every remote endpoints`)
+            throw new Error(`PubSub must be built with 0 or undefined neededResponse config option as it must have response from every remote endpoints`)
         }
-
+        const responseChunker = (this._config.maxKeys < 1 && this._config.maxValues < 1)
+            ? ResponseChunkerImpl.createPassiveChunker()
+            : new ResponseChunkerImpl(this._config.maxKeys, this._config.maxValues)
+        ;
         const topic = this._config.topic;
         const grid = this._grid;
         const sender = (message: Message) => {
@@ -57,6 +66,7 @@ export class PubSubBuilder {
             .setNotificationSender(sender)
             .setRequestSender(sender)
             .setResponseSender(sender)
+            .setResponseChunker(responseChunker)
             .build();
         const result = new PubSub(
             comlink,

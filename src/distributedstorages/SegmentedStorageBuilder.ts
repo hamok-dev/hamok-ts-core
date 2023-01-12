@@ -1,4 +1,4 @@
-import { createCodec, Message, MessageProtocol, MessageType, StorageCodec } from "@hamok-dev/common";
+import { Codec, createCodec, Message, MessageProtocol, MessageType, StorageCodec } from "@hamok-dev/common";
 import { HamokGrid } from "../HamokGrid";
 import { ResponseChunkerImpl } from "../messages/ResponseChunkerImpl";
 import { SimpleStorage } from "../storages/SimpleStorage";
@@ -17,7 +17,9 @@ export class SegmentedStorageBuilder<K, V> {
     private _keyDecoder?: StorageDecoder<K>;
     private _valueEncoder?: StorageEncoder<V>;
     private _valueDecoder?: StorageDecoder<V>;
-
+    private _keyCodec?: Codec<K, Uint8Array>;
+    private _valueCodec?: Codec<V, Uint8Array>;
+    
     public constructor() {
         this._generatedStorageId = uuid();
         this._generatedRequestTimeoutInMs = Math.random();
@@ -53,6 +55,16 @@ export class SegmentedStorageBuilder<K, V> {
         if (!storage) return this;
         this._baseStorage = storage;
         this._config.storageId = storage.id;
+        return this;
+    }
+
+    public withKeyCodec(codec: Codec<K, Uint8Array>): SegmentedStorageBuilder<K, V> {
+        this._keyCodec = codec;
+        return this;
+    }
+
+    public withValueCodec(codec: Codec<V, Uint8Array>): SegmentedStorageBuilder<K, V> {
+        this._valueCodec = codec;
         return this;
     }
 
@@ -102,7 +114,18 @@ export class SegmentedStorageBuilder<K, V> {
             !this._valueEncoder || 
             !this._valueDecoder) 
         {
-            throw new Error(`Cannot build SegmentedStorage without keyEncoder, keyDecoder, valueEncoder, valueDecoder`);
+            if (!this._keyCodec || !this._valueCodec) {
+                throw new Error(`Cannot build SeparatedStorage without keyEncoder, keyDecoder, valueEncoder, valueDecoder`);
+            }
+        } else {
+            this._keyCodec = createCodec(
+                this._keyEncoder,
+                this._keyDecoder
+            );
+            this._valueCodec = createCodec(
+                this._valueEncoder,
+                this._valueDecoder
+            )
         }
         if (!this._grid) {
             throw new Error(`Cannot build SegmentedStorage without a given HamokGrid`);
@@ -115,8 +138,8 @@ export class SegmentedStorageBuilder<K, V> {
         }
 
         const codec = new StorageCodec(
-            createCodec(this._keyEncoder, this._keyDecoder),
-            createCodec(this._valueEncoder, this._valueDecoder)
+            this._keyCodec,
+            this._valueCodec
         );
         const responseChunker = (this._config.maxKeys < 1 && this._config.maxValues < 1)
             ? ResponseChunkerImpl.createPassiveChunker()

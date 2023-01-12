@@ -26,10 +26,15 @@ export class ResponseChunkerImpl implements ResponseChunker{
             yield message;
             return;
         }
+        let iterator: IterableIterator<Message> | undefined;
         if (message.values.length < 1) {
-            return this._chunkByKeys(message);
+            iterator = this._chunkByKeys(message);
+        } else {
+            iterator = this._chunkByEntries(message);
         }
-        return this._chunkByEntries(message);
+        for (const chunk of iterator) {
+            yield chunk;
+        }
     }
 
     private *_chunkByKeys(message: Message): IterableIterator<Message> {
@@ -49,7 +54,7 @@ export class ResponseChunkerImpl implements ResponseChunker{
                 sequence,
                 lastMessage
             });
-            sliceStart += sliceEnd;
+            sliceStart = sliceEnd;
             ++sequence;
         }
     }
@@ -73,7 +78,7 @@ export class ResponseChunkerImpl implements ResponseChunker{
                 sequence,
                 lastMessage
             });
-            sliceStart += sliceEnd;
+            sliceStart = sliceEnd;
             ++sequence;
         }
     }

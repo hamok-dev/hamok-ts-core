@@ -461,13 +461,17 @@ export abstract class PubSubComlink implements PubSubGridLink {
     }
 
     private _processResponse(message: Message): void {
+        if (!message.requestId) {
+            logger.warn(`Cannot process messages`);
+            return;
+        }
         const chunkedResponse = message.sequence !== undefined && message.lastMessage !== undefined;
         const onlyOneChunkExists = message.sequence === 0 && message.lastMessage === true;
         if (chunkedResponse && !onlyOneChunkExists) {
             const pendingResponseId = `${message.sourceId}#${message.requestId}`;
             let pendingResponse = this._pendingResponses.get(pendingResponseId);
             if (!pendingResponse) {
-                pendingResponse = new PendingResponse();
+                pendingResponse = new PendingResponse(message.requestId);
                 this._pendingResponses.set(pendingResponseId, pendingResponse);
             }
             pendingResponse.accept(message);

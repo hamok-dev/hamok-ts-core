@@ -14,7 +14,13 @@ const logNotUsedAction = (context: string, obj: any) => {
 }
 
 export type CachedStorageConfig = StorageComlinkConfig & {
+    /**
+     * The maximum number of keys can be put into one outgoing request / response
+     */
     maxKeys: number,
+    /**
+     * The maximum number of values can be put into one outgoing request / response
+     */
     maxValues: number,
 }
 

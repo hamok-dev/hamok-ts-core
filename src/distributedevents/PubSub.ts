@@ -7,14 +7,26 @@ import { PubSubComlink, PubSubComlinkConfig } from "./PubSubComlink";
 const logger = createLogger("PubSub");
 
 export type SubscriptionChangedListener = (remoteEndpointId: string, topic: string) => void;
-export type CustomDataListener = (data: Uint8Array, topic: string) => void;
+export type PubSubListener = (
+    data: Uint8Array,
+    sourceEndpointId?: string, 
+    event?: string, 
+    topic?: string,
+) => void;
 
 const SUBSCRIPTION_ADDED_EVENT_NAME = "SubscriptionAdded";
 const SUBSCRIPTION_REMOVED_EVENT_NAME = "SubscriptionRemoved";
-const CUSTOM_DATA_RECEIVED = "customDataReceived";
+// const CUSTOM_DATA_RECEIVED = "customDataReceived";
 
 export type PubSubConfig = PubSubComlinkConfig & {
-    
+    /**
+     * The maximum number of keys can be put into one outgoing request / response
+     */
+    maxKeys: number,
+    /**
+     * The maximum number of values can be put into one outgoing request / response
+     */
+    maxValues: number,
 }
 
 /**
@@ -82,8 +94,14 @@ export class PubSub {
             })
             .onPublishCustomDataRequest(async request => {
                 const hasTopic = this._subscriptions.has(request.event);
+                logger.info(`onPublishCustomDataRequest()`, request);
                 if (hasTopic) {
-                    this._emitter.emit(CUSTOM_DATA_RECEIVED, request.customData, request.event);
+                    this._emitter.emit(request.event,
+                        request.customData,
+                        request.sourceEndpointId,
+                        request.event,
+                        this.config.topic
+                    );
                 } else {
                     logger.debug(`onPublishCustomDataRequest(): Does not have a subscription for topic ${request.event}`, request);
                 }
@@ -95,16 +113,27 @@ export class PubSub {
                     logger.debug(`onPublishCustomDataNotification(): Does not have a subscription for topic ${notification.event}`, notification);
                     return;
                 }
-                this._emitter.emit(CUSTOM_DATA_RECEIVED, notification.customData, notification.event);
+                this._emitter.emit(notification.event, 
+                    notification.customData, 
+                    notification.sourceEndpointId,
+                    notification.event,
+                    this.config.topic
+                );
             })
             .onRemoteEndpointJoined(remoteEndpointId => {
 
             })
             .onRemoteEndpointDetached(remoteEndpointId => {
-
+                
             })
             .onPubSubSyncRequested(async promise => {
                 
+            })
+            .onChangedLeaderId(leaderId => {
+                if (!leaderId) {
+                    return;
+                }
+                this._standalone = false;
             })
             
     }
@@ -129,10 +158,10 @@ export class PubSub {
         return this;
     }
 
-    public async subscribe(event: string, listener: CustomDataListener): Promise<void> {
+    public async subscribe(event: string, listener: PubSubListener): Promise<void> {
         this._emitter.on(event, listener);
         if (this._standalone) {
-            this._removeSubscription(event, this._comlink.localEndpointId);
+            this._addSubscription(event, this._comlink.localEndpointId);
             return;
         }
         if (this._subscriptions.has(event)) {
@@ -142,7 +171,7 @@ export class PubSub {
         await this._comlink.requestAddSubscription(event);
     }
 
-    public async unsubscribe(event: string, listener: CustomDataListener): Promise<void> {
+    public async unsubscribe(event: string, listener: PubSubListener): Promise<void> {
         this._emitter.off(event, listener);
         if (0 < this._emitter.listenerCount(event)) {
             return;
@@ -154,44 +183,65 @@ export class PubSub {
         await this._comlink.requestRemoveSubscription(event);
     }
 
-    public async publish(topic: string, customData: Uint8Array): Promise<void> {
-        const endpointIds = this._subscriptions.get(topic);
+    public async publish(event: string, customData: Uint8Array): Promise<void> {
+        const endpointIds = this._subscriptions.get(event);
         if (!endpointIds) {
             return;
         }
         if (this._standalone) {
-            this._emitter.emit(topic, customData);
+            this._emitter.emit(
+                event, 
+                customData,
+                this._comlink.localEndpointId,
+                this.config.topic
+            );
             return;
         }
         const remoteEndpointIds = this._allButLocalEndpoint(endpointIds, () => {
-            this._emitter.emit(topic, customData);
+            this._emitter.emit(
+                event, 
+                customData,
+                this._comlink.localEndpointId,
+                this.config.topic
+            );
         });
         if (remoteEndpointIds.size < 1) {
             return;
         }
         await this._comlink.requestPublishCustomData(
-            topic,
+            event,
             customData,
             remoteEndpointIds
         );
     }
 
-    public async notify(topic: string, customData: Uint8Array): Promise<void> {
-        const endpointIds = this._subscriptions.get(topic);
+    public async notify(event: string, customData: Uint8Array): Promise<void> {
+        const endpointIds = this._subscriptions.get(event);
         if (!endpointIds) {
             return;
         }
         if (this._standalone) {
-            this._emitter.emit(topic, customData);
+            this._emitter.emit(
+                event, 
+                customData,
+                this._comlink.localEndpointId,
+                this.config.topic
+            );
             return;
         }
         const remoteEndpointIds = this._allButLocalEndpoint(endpointIds, () => {
-            this._emitter.emit(topic, customData);
+            this._emitter.emit(
+                event, 
+                customData,
+                this._comlink.localEndpointId,
+                this.config.topic
+            );
         });
+        logger.info(`notify()`, remoteEndpointIds);
         const localEndpointId = this._comlink.localEndpointId;
         for (const remoteEndpointId of remoteEndpointIds) {
             const notification = new PublishCustomDataNotification(
-                topic,
+                event,
                 customData,
                 localEndpointId,
                 remoteEndpointId

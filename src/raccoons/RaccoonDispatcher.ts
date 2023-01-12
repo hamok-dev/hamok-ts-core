@@ -141,6 +141,7 @@ export class RaccoonDispatcher implements RaccoonInboundEvents, RaccoonOutboundE
     public emitOutboundRaftVoteRequest(request: RaftVoteRequest) {
         try {
             const message = this._codec.encodeRaftVoteRequest(request);
+            // logger.warn(`emitOutboundRaftVoteRequest(): `, message);
             this._emitOutboundMessage(message);
         } catch (err) {
             logger.warn("emitOutboundRaftVoteRequest(): Error occurred while encoding", err);

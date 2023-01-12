@@ -47,6 +47,7 @@ export class MessageEmitter {
     }
 
     public emit(event: string, ...args: any[]): this {
+        // logger.info("emitted ", event, ...args);
         this._emitter.emit(event, ...args);
         return this;
     }
@@ -65,13 +66,16 @@ export class MessageEmitter {
             const actualBlockingPoint = this.actualBlockingPoint;
             const index = ++this._index;
             this._invocations.set(index, new Promise<void>(async resolve => {
+                // logger.info("Invocation for ", values);
                 if (enqueued) {
                     const [requestId, sourceEndpointId] = this._getRequestIdAndSourceEndpointId(...values);
                     this._emitEnqueuedRequest(requestId, sourceEndpointId);
+                    logger.trace(`Invocation is enqueued for event ${event}, index: ${index}, queue size: ${this._invocations.size}`);
                     await actualBlockingPoint;
                     this._emitDequeuedRequest(requestId, sourceEndpointId);
+                    logger.trace(`Dequeued for event ${event}, index: ${index}, queue size: ${this._invocations.size}`);
                 }
-                
+                // logger.info("emitting ", ...values);
                 listener(...values).catch((err) => {
                     logger.warn(`Error occurred while invoking listener. arguments, error:`, values, err);
                 }).finally(() => {

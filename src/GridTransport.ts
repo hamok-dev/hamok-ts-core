@@ -1,40 +1,27 @@
 import { 
     Message, 
-    MessageType, 
-    MessageDefaultProcessor, 
-    MessageProcessor, 
-    GridCodec, 
     createLogger,
-    HelloNotification,
-    SubmitMessageRequest,
-    EndpointStatesNotification,
-    StorageSyncRequest,
-    StorageSyncResponse,
-    RaftVoteRequest,
-    RaftVoteResponse,
-    RaftAppendEntriesRequestChunk,
-    RaftAppendEntriesResponse,
-    SubmitMessageResponse,
 } from "@hamok-dev/common"
 
 import { EventEmitter } from "ws";
 
 const logger = createLogger("GridTransport");
 
-export type MessageBytesListener = (bytes: Uint8Array) => void;
-
+// export type MessageBytesListener = (bytes: Uint8Array) => void;
+export type MessageListener = (message: Message) => void;
 export interface GridTransport {
-    readonly receiver: MessageBytesListener;
-    sender: MessageBytesListener;
+    readonly receiver: MessageListener;
+    sender: MessageListener;
     send(message: Message): void;
+    receive(message: Message): void;
     // sender(listener: MessageBytesListener): void;
 }
 
 export abstract class GridTransportAbstract implements GridTransport {
-    private _sender?: MessageBytesListener;
+    private _sender?: MessageListener;
     private _noSenderAvailable = false;
 
-    public set sender(listener: MessageBytesListener) {
+    public set sender(listener: MessageListener) {
         if (this._sender) {
             logger.warn("sender is assigned more than once. Only the last assign will be used");
         }
@@ -50,10 +37,12 @@ export abstract class GridTransportAbstract implements GridTransport {
             }
             return;
         }
+        if (!this.canSend(message)) {
+            return;
+        }
         try {
-            const bytes = message.toBinary();
             try {
-                this._sender(bytes);
+                this._sender(message);
             } catch (err) {
                 logger.warn(`Error occurred while sending message`, err);
             }
@@ -62,18 +51,12 @@ export abstract class GridTransportAbstract implements GridTransport {
         }
     }
 
-    public get receiver(): MessageBytesListener {
-        return (bytes) => {
-            let message: Message | undefined;
-            try {
-                message = Message.fromBinary(bytes);
-            } catch (err) {
-                logger.warn(`Error occurred while deserializing message`, err);
-                return;
-            }
-            if (!message) {
-                return;
-            }
+    protected canSend(message: Message): boolean {
+        return true;
+    }
+
+    public get receiver(): MessageListener {
+        return (message: Message) => {
             this.receive(message);
         }
     }

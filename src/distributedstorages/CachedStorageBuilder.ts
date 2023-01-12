@@ -1,4 +1,4 @@
-import { createCodec, Message, MessageProtocol, StorageCodec } from "@hamok-dev/common";
+import { Codec, createCodec, Message, MessageProtocol, StorageCodec } from "@hamok-dev/common";
 import { HamokGrid } from "../HamokGrid";
 import { SimpleStorage } from "../storages/SimpleStorage";
 import { Storage } from "../storages/Storage";
@@ -20,7 +20,9 @@ export class CachedStorageBuilder<K, V> {
     private _keyDecoder?: StorageDecoder<K>;
     private _valueEncoder?: StorageEncoder<V>;
     private _valueDecoder?: StorageDecoder<V>;
-
+    private _keyCodec?: Codec<K, Uint8Array>;
+    private _valueCodec?: Codec<V, Uint8Array>;
+    
     public constructor() {
         this._generatedStorageId = uuid();
         this._generatedRequestTimeoutInMs = Math.random();
@@ -60,6 +62,16 @@ export class CachedStorageBuilder<K, V> {
 
     public setHamokGrid(grid: HamokGrid): CachedStorageBuilder<K, V> {
         this._grid = grid;
+        return this;
+    }
+
+    public withKeyCodec(codec: Codec<K, Uint8Array>): CachedStorageBuilder<K, V> {
+        this._keyCodec = codec;
+        return this;
+    }
+
+    public withValueCodec(codec: Codec<V, Uint8Array>): CachedStorageBuilder<K, V> {
+        this._valueCodec = codec;
         return this;
     }
 
@@ -104,7 +116,18 @@ export class CachedStorageBuilder<K, V> {
             !this._valueEncoder || 
             !this._valueDecoder) 
         {
-            throw new Error(`Cannot build CachedStorage without keyEncoder, keyDecoder, valueEncoder, valueDecoder`);
+            if (!this._keyCodec || !this._valueCodec) {
+                throw new Error(`Cannot build SeparatedStorage without keyEncoder, keyDecoder, valueEncoder, valueDecoder`);
+            }
+        } else {
+            this._keyCodec = createCodec(
+                this._keyEncoder,
+                this._keyDecoder
+            );
+            this._valueCodec = createCodec(
+                this._valueEncoder,
+                this._valueDecoder
+            )
         }
         if (!this._grid) {
             throw new Error(`Cannot build CachedStorage without a given HamokGrid`);
@@ -117,8 +140,8 @@ export class CachedStorageBuilder<K, V> {
         }
 
         const codec = new StorageCodec(
-            createCodec(this._keyEncoder, this._keyDecoder),
-            createCodec(this._valueEncoder, this._valueDecoder)
+            this._keyCodec,
+            this._valueCodec
         );
         const responseChunker = (this._config.maxKeys < 1 && this._config.maxValues < 1)
             ? ResponseChunkerImpl.createPassiveChunker()

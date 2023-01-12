@@ -16,7 +16,13 @@ const logNotUsedAction = (context: string, obj: any) => {
 }
 
 export type SeparatedStorageConfig = {
+    /**
+     * The maximum number of keys can be put into one outgoing request / response
+     */
     maxKeys: number,
+    /**
+     * The maximum number of values can be put into one outgoing request / response
+     */
     maxValues: number,
 }
 
@@ -51,6 +57,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
                 logger.info(`onClearEntriesNotification(): Entries in ${this.id} are cleared`, notification);
             })
             .onGetEntriesRequest(async request => {
+                // logger.info("Get request", request);
                 const foundEntries = await this._storage.getAll(request.keys);
                 const response = request.createResponse(foundEntries);
                 this._comlink.sendGetEntriesResponse(response);
@@ -209,6 +216,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
 
     public async getAll(keys: ReadonlySet<K>): Promise<ReadonlyMap<K, V>> {
         const localEntries = await this._storage.getAll(keys);
+        // console.warn("getAll", keys, localEntries);
         if (keys.size <= localEntries.size) {
             return localEntries;
         }

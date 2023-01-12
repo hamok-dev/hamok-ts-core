@@ -99,6 +99,7 @@ export class SimpleStorage<K, V> implements Storage<K, V> {
                 result.set(key, value);
             }
         }
+        // console.warn("simpleStorage ", keys, result, this._entries, Collections.unmodifiableMap(result));
         return Collections.unmodifiableMap(result);
     }
 
