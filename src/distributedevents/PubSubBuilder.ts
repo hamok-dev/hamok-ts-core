@@ -1,4 +1,4 @@
-import { createLogger, Message, MessageProtocol } from "@hamok-dev/common";
+import { createLogger, Message, MessageProtocol, MessageType } from "@hamok-dev/common";
 import { HamokGrid } from "../HamokGrid";
 import { PubSub, PubSubConfig } from "./PubSub";
 import { v4 as uuid } from "uuid";
@@ -54,18 +54,42 @@ export class PubSubBuilder {
         ;
         const topic = this._config.topic;
         const grid = this._grid;
-        const sender = (message: Message) => {
+        // const sender = (message: Message) => {
+        //     message.sourceId = grid.localEndpointId;
+        //     message.storageId = topic;
+        //     message.protocol = MessageProtocol.PUBSUB_COMMUNICATION_PROTOCOL;
+        //     logger.info("SENDING MESSAGE");
+        //     grid.transport.send(message);
+        // };
+        const setupAndGetType = (message: Message): MessageType | undefined => {
             message.sourceId = grid.localEndpointId;
             message.storageId = topic;
             message.protocol = MessageProtocol.PUBSUB_COMMUNICATION_PROTOCOL;
-            grid.transport.send(message);
-        };
+            return message.type;
+        }
         const comlink = grid.createPubSubComlink()
             .setConfig(this._config)
             .setDefaultEndpointResolver(() => grid.remoteEndpointIds)
-            .setNotificationSender(sender)
-            .setRequestSender(sender)
-            .setResponseSender(sender)
+            .setNotificationSender(message => {
+                setupAndGetType(message);
+                grid.transport.send(message);
+            })
+            .setRequestSender(message => {
+                const messageType = setupAndGetType(message);
+                switch (messageType) {
+                    case MessageType.ADD_SUBSCRIPTION_REQUEST:
+                    case MessageType.REMOVE_SUBSCRIPTION_REQUEST:
+                        grid.submit(message);
+                        break;
+                    default:
+                        grid.transport.send(message);
+                        break;
+                }
+            })
+            .setResponseSender(message => {
+                setupAndGetType(message);
+                grid.transport.send(message);
+            })
             .setResponseChunker(responseChunker)
             .build();
         const result = new PubSub(

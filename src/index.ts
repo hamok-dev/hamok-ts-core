@@ -34,10 +34,15 @@ export {
 } from "./storages/Storage";
 
 export {
-    StorageEvents
+    StorageEvents,
+    StorageEventsImpl,
 } from "./storages/StorageEvents";
 
-export { 
+export {
+    SimpleStorageAbstract,
+} from "./storages/SimpleStorageAbstract";
+
+export {
     SimpleStorage,
 } from "./storages/SimpleStorage";
 

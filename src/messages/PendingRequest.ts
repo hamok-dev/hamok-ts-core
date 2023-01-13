@@ -192,9 +192,10 @@ export class PendingRequest implements Promise<ReadonlyArray<Message>> {
 
     public get [Symbol.toStringTag](): string {
         const acceptedEndpointIds = Array.from(this._responses.keys()).join(", ");
+        const pendingEndpointIds = Array.from(this._pendingEndpointIds).join(", ");
         return `Pending request id: ${this._id}, 
                 received responses: ${this._receivedResponses}, 
-                remaining endpoints: ${this._pendingEndpointIds}, 
+                remaining endpoints: ${pendingEndpointIds}, 
                 accepted endpoints: ${acceptedEndpointIds} 
                 timeoutInMs: ${this._timeoutInMs}`;
     }

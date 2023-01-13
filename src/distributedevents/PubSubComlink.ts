@@ -26,7 +26,7 @@ import { RemoteEndpointStateChangedListener } from "../raccoons/RemotePeers";
 import { CompletablePromise } from "../utils/CompletablePromise";
 import { MessageEmitter } from "../messages/MessageEmitter";
 
-const logger = createLogger("StorageComlink");
+const logger = createLogger("PubSubComlink");
 
 const STORAGE_SYNC_REQUESTED_EVENT_NAME = "StorageSyncRequested";
 const CHANGED_LEADER_ID_EVENT_NAME = "ChangedLeaderId";
@@ -114,11 +114,11 @@ export abstract class PubSubComlink implements PubSubGridLink {
             for (const pendingRequest of this._pendingRequests.values()) {
                 pendingRequest.removeEndpointId(remoteEndpointId);
             }
-            // for (const pendingResponse of this._pendingResponses.values()) {
-            //     if (pendingResponse.sourceEndpointId === remoteEndpointId) {
-            //         pendingResponse.cancel();
-            //     }
-            // }
+            for (const [key, pendingResponse] of Array.from(this._pendingResponses)) {
+                if (pendingResponse.sourceEndpointId === remoteEndpointId) {
+                    this._pendingResponses.delete(key);
+                }
+            }
         })
         
     }
@@ -380,13 +380,28 @@ export abstract class PubSubComlink implements PubSubGridLink {
         this._dispatchRequest(message, destinationEndpointIds);
         const tried = attempt ?? 0;
         return pendingRequest.then(responses => {
+            this._purgeResponseForRequest(message.requestId!);
+            this._pendingRequests.delete(pendingRequest.id);
             return responses;
         }).catch(err => {
+            logger.warn(`Error occurred while waiting for request ${pendingRequest}, messageType: ${message.type}. Tried: ${tried}`, err);
+            this._purgeResponseForRequest(message.requestId!);
+            this._pendingRequests.delete(pendingRequest.id);
             if (tried < 3) {
                 return this._request(message, targetEndpointIds, tried + 1);
             }
             throw err;
         });
+    }
+
+    private _purgeResponseForRequest(requestId: string) {
+        const pendingResponseKeys: string[] = [];
+        for (const [key, pendingResponse] of this._pendingResponses) {
+            if (pendingResponse.requestId === requestId) {
+                pendingResponseKeys.push(key);
+            }
+        }
+        pendingResponseKeys.forEach(pendingResponseKey => this._pendingResponses.delete(pendingResponseKey));
     }
 
     protected abstract defaultResolvingEndpointIds(): ReadonlySet<string>;
@@ -456,26 +471,32 @@ export abstract class PubSubComlink implements PubSubGridLink {
         this._dispatch(
             message,
             this.sendNotification.bind(this),
-            new Set<string>(destinationId)
+            new Set<string>([destinationId])
         );
     }
 
     private _processResponse(message: Message): void {
-        if (!message.requestId) {
-            logger.warn(`Cannot process messages`);
+        if (!message.requestId || !message.sourceId) {
+            logger.warn(`_processResponse(): Message does not have a requestId or sourceId`, message);
             return;
         }
         const chunkedResponse = message.sequence !== undefined && message.lastMessage !== undefined;
         const onlyOneChunkExists = message.sequence === 0 && message.lastMessage === true;
+        // console.warn("_responseReceived ", message);
         if (chunkedResponse && !onlyOneChunkExists) {
             const pendingResponseId = `${message.sourceId}#${message.requestId}`;
             let pendingResponse = this._pendingResponses.get(pendingResponseId);
             if (!pendingResponse) {
-                pendingResponse = new PendingResponse(message.requestId);
+                pendingResponse = new PendingResponse(message.sourceId, message.requestId);
                 this._pendingResponses.set(pendingResponseId, pendingResponse);
             }
             pendingResponse.accept(message);
             if (!pendingResponse.isReady) {
+                const pendingRequest = this._pendingRequests.get(message.requestId ?? "notExists");
+                // let's postpone the timeout if we knoe responses are coming
+                if (pendingRequest) {
+                    pendingRequest.postponeTimeout();
+                }
                 return;
             }
             if (!this._pendingResponses.delete(pendingResponseId)) {
@@ -502,6 +523,13 @@ export abstract class PubSubComlink implements PubSubGridLink {
             return;
         }
         pendingRequest.accept(message);
+    }
+
+    private _postponePendingRequest(requestId: string): boolean {
+        const pendingRequest = this._pendingRequests.get(requestId);
+        if (!pendingRequest) return false;
+        pendingRequest.postponeTimeout();
+        return true;
     }
 
     private _createReceiver(): MessageProcessor<void> {

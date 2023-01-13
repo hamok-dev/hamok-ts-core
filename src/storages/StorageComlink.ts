@@ -197,11 +197,11 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
             for (const pendingRequest of this._pendingRequests.values()) {
                 pendingRequest.removeEndpointId(remoteEndpointId);
             }
-            // for (const pendingResponse of this._pendingResponses.values()) {
-            //     if (pendingResponse.sourceEndpointId === remoteEndpointId) {
-            //         pendingResponse.cancel();
-            //     }
-            // }
+            for (const [key, pendingResponse] of Array.from(this._pendingResponses)) {
+                if (pendingResponse.sourceEndpointId === remoteEndpointId) {
+                    this._pendingResponses.delete(key);
+                }
+            }
         });
         this._ongoingRequestIds = new OngoingRequestIds(config.ongoingRequestsSendingPeriodInMs);
         this._ongoingRequestIds.sender = notification => {
@@ -415,7 +415,7 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
 
     public onInsertEntriesRequest(listener: InsertEntriesRequestListener<K, V>): StorageComlink<K, V> {
         const onEvent = this._getOnEvent(this._config.synchronize.insertEntries);
-        onEvent(EVICT_ENTRIES_NOTIFICATION, listener);
+        onEvent(INSERT_ENTRIES_REQUEST, listener);
         return this;
     }
 
@@ -823,13 +823,13 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
         this._dispatch(
             message,
             this.sendNotification.bind(this),
-            new Set<string>(destinationId)
+            new Set<string>([destinationId])
         );
     }
 
     private _processResponse(message: Message): void {
-        if (!message.requestId) {
-            logger.warn(`_processResponse(): Message does not have a requestId`, message);
+        if (!message.requestId || !message.sourceId) {
+            logger.warn(`_processResponse(): Message does not have a requestId or sourceId`, message);
             return;
         }
         const chunkedResponse = message.sequence !== undefined && message.lastMessage !== undefined;
@@ -839,7 +839,7 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
             const pendingResponseId = `${message.sourceId}#${message.requestId}`;
             let pendingResponse = this._pendingResponses.get(pendingResponseId);
             if (!pendingResponse) {
-                pendingResponse = new PendingResponse(message.requestId);
+                pendingResponse = new PendingResponse(message.sourceId, message.requestId);
                 this._pendingResponses.set(pendingResponseId, pendingResponse);
             }
             pendingResponse.accept(message);

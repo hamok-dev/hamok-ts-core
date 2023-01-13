@@ -61,8 +61,6 @@ export class CachedStorage<K, V> implements Storage<K, V> {
             .onGetEntriesRequest(async request => {
                 const foundEntries = new Map<K, V>();
                 const pendingFetches: Promise<void>[] = [];
-                // TODO: make it possible to postpone the request waiting time from here
-                // something like GET_REQUEST_ONGOING_NOTIFICATION
                 for (const key of request.keys) {
                     const value = this._cache.get(key);
                     if (value) {
@@ -233,11 +231,22 @@ export class CachedStorage<K, V> implements Storage<K, V> {
             );
         }
         this._metrics.incrementMisses(missingKeys.size);
+        const pendingFetch = this._storage.getAll(missingKeys);
+        pendingFetch.finally(() => {
+            for (const missingKey of missingKeys) {
+                this._pendingFetches.delete(missingKey);
+            }    
+        });
+        for (const missingKey of missingKeys) {
+            this._pendingFetches.set(missingKey, new Promise(resolve => {
+                pendingFetch.then(entries => resolve(entries.get(missingKey)))
+            }));
+        }
         return Collections.concatMaps(
             new Map<K, V>(),
             localCachedEntries,
             remoteCachedEntries,
-            await this._storage.getAll(missingKeys)
+            await pendingFetch
         );
     }
     
