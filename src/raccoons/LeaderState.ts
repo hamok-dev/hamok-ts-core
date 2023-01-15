@@ -155,7 +155,7 @@ export class LeaderState extends RaccoonState {
             return;
         }
         const sourcePeerId = response.sourcePeerId;
-        var sentRequest = this._sentRequests.delete(sourcePeerId);
+        const sentRequest = this._sentRequests.delete(sourcePeerId);
         if (sentRequest === undefined) {
             // most likely a response to a keep alive or expired request
             return;
@@ -250,7 +250,7 @@ export class LeaderState extends RaccoonState {
     }
 
     private _updateFollowers() {
-        const config = this.config;
+        // const config = this.config;
         const props = this.syncedProperties;
         const logs = this.logs;
         const remotePeers = this.remotePeers;
@@ -277,7 +277,7 @@ export class LeaderState extends RaccoonState {
             }
             let sentRequest = this._sentRequests.get(peerId);
             if (sentRequest !== undefined) {
-                const [requestId, requestCreated] = sentRequest;
+                const [_requestId, requestCreated] = sentRequest;
                 // we kill the sent request if it is older than the threshold
                 if (requestCreated < now - 30000) {
                     this._sentRequests.delete(peerId);
@@ -327,7 +327,7 @@ export class LeaderState extends RaccoonState {
     }
 
     private _sendEndpointStateNotification(targetRemotePeerIds: ReadonlySet<string>, activeRemoteEndpointIds: ReadonlySet<string>) {
-        const props = this.syncedProperties;
+        // const props = this.syncedProperties;
         const logs = this.logs;
             // logger.info(`_sendEndpointStateNotification: targetRemotePeerIds`, targetRemotePeerIds, activeRemoteEndpointIds);
         for (const remotePeerId of targetRemotePeerIds) {

@@ -57,7 +57,7 @@ export class RemotePeers {
     }
 
     public touch(remotePeerId: string) {
-        var remotePeer = this._remotePeers.get(remotePeerId);
+        const remotePeer = this._remotePeers.get(remotePeerId);
         if (remotePeer === undefined) {
             logger.warn(`Unknown remote peer ${remotePeerId} is attempted to be retrieved`)
             // this.join(remotePeerId);

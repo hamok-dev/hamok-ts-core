@@ -224,7 +224,7 @@ export class RaftLogs {
         const thresholdInMs = Date.now() - this._expirationTimeInMs;
         let expiredLogIndex = -1;
         for (let index = this._lastApplied; index < this.commitIndex; ++index) {
-            var logEntry = this._entries.get(index);
+            const logEntry = this._entries.get(index);
             if (logEntry == undefined) {
                 // already purged?
                 logger.info(`LastApplied is set to 
@@ -248,7 +248,7 @@ export class RaftLogs {
         if (this._commitIndex < expiredLogIndex) {
             logger.warn("expired log index is higher than the commit index. This is a problem! increase the expiration timeout, because it leads to a potential inconsistency issue.");
         }
-        var removed = 0;
+        let removed = 0;
         for (let index = this._lastApplied; index < expiredLogIndex; ++index) {
             if (this._entries.delete(index)) {
                 // logger.warn("Removed entry index", index);

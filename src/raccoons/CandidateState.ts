@@ -123,7 +123,7 @@ export class CandidateState extends RaccoonState {
 
         // to execute async
         (async () => {
-            const config = this.config;
+            // const config = this.config;
             const props = this.syncedProperties;
             const logs = this.logs;
             const remotePeers = this.remotePeers;

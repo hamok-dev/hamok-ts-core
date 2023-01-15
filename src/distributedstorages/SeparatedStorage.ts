@@ -187,7 +187,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
         return Collections.reduceSet<K>(
             new Set<K>(),
             collidedKey => {
-
+                logger.warn(`Colliding entries in storage ${this.id} for key ${collidedKey}`);
             },
             localKeys,
             remoteKeys,
@@ -228,6 +228,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
             .forEach(entries => Collections.reduceMaps(
                 result,
                 (key, v1, v2) => {
+                    logger.warn(`Duplicated entry found in storage ${this.id} for key ${key}. value1: ${v1}, value2: ${v2}`);
                     // duplicated item is found
                     // detectedCollisionsSubject::onNext,
                 },
@@ -430,7 +431,10 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
     }
 
     public async *localStorageEntries(): AsyncIterableIterator<[K, V]> {
-        return this._storage;
+        const iterator = this._storage[Symbol.asyncIterator]();
+        for await (const entry of iterator) {
+            yield entry;
+        }
     }
 
     public localClearStorage(): Promise<void> {
@@ -439,7 +443,7 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
 
     public async checkCollidingEntries() {
         await this._checkCollidingEntries(this._comlink.remoteEndpointIds).catch(err => {
-            logger.warn(`Error occurred while checking colliding entries`);
+            logger.warn(`Error occurred while checking colliding entries`, err);
         });
     }
     

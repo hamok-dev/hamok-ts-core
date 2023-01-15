@@ -338,6 +338,7 @@ export class RaccoonImpl implements Raccoon {
     }
 
     private _createRaccoonBase(): RaccoonBase {
+        /* eslint-disable  @typescript-eslint/no-this-alias */
         const raccoon = this;
         const result = new class implements RaccoonBase {
             requestStorageSync(): Promise<void> {

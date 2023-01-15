@@ -18,7 +18,7 @@ export enum RaftState {
     FOLLOWER = "FOLLOWER",
     CANDIDATE = "CANDIDATE",
     LEADER = "LEADER",
-};
+}
 
 export abstract class RaccoonState {
 

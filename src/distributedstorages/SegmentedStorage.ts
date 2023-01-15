@@ -202,9 +202,9 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
             .onUpdateEntriesNotification(async notification => {
                 logNotUsedAction(`onUpdateEntriesNotification()`, notification);
             })
-            .onRemoteEndpointJoined(remoteEndpointId => {
+            // .onRemoteEndpointJoined(remoteEndpointId => {
 
-            })
+            // })
             .onRemoteEndpointDetached(removedRemoteEndpointId => {
                 // remove all segments related to the removed remote endpoint id
                 for (const [key, remoteEndpointId] of this._segments.entries()) {
@@ -222,15 +222,15 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
                     await this._ongoingSync;
                     return;
                 }
-                this._ongoingSync = new Promise(async resolve => {
-                    logger.trace(`Storage ${this.id} is joining to the grid`);
-                    const keys = await this._storage.keys();
-                    const entries = await this._storage.getAll(keys);
-                    await this._storage.clear();
-                    this._standalone = false;
-                    await this.insertAll(entries);
-                    resolve();
-                });
+                logger.trace(`Storage ${this.id} is joining to the grid`);
+                this._ongoingSync = this._storage.keys()
+                    .then(keys => this._storage.getAll(keys))
+                    .then(entries => {
+                        this._storage.clear().then(() => new Promise<void>(resolve => {
+                            this._standalone = false;
+                            this.insertAll(entries).then(() => resolve());
+                        }));
+                    })
                 this._ongoingSync.finally(() => {
                     this._ongoingSync = undefined;
                 });
@@ -299,7 +299,7 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
         return Collections.reduceSet<K>(
             new Set<K>(),
             collidedKey => {
-
+                logger.warn(`Colliding entries in storage ${this.id} for key ${collidedKey}`);
             },
             localKeys,
             remoteKeys,
@@ -366,6 +366,7 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
         return updatedEntries.get(key);
     }
 
+    /* eslint-disable @typescript-eslint/no-explicit-any */
     public async setAll(entries: ReadonlyMap<K, V>, thisArg?: any): Promise<ReadonlyMap<K, V>> {
         if (this._standalone) {
             return this._storage.setAll(entries);
@@ -529,7 +530,10 @@ export class SegmentedStorage<K, V> implements Storage<K, V> {
     }
 
     public async *localStorageEntries(): AsyncIterableIterator<[K, V]> {
-        return this._storage[Symbol.asyncIterator];
+        const iterator = this._storage[Symbol.asyncIterator]();
+        for await (const entry of iterator) {
+            yield entry;
+        }
     }
 
     public async clearLocalStorage(): Promise<void> {

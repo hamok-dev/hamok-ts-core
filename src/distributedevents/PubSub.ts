@@ -1,4 +1,3 @@
-import { Timestamp } from "@bufbuild/protobuf";
 import { Collections, createLogger, PublishCustomDataNotification } from "@hamok-dev/common";
 import { EventEmitter } from "ws";
 import { PubSubBuilder } from "./PubSubBuilder";
@@ -121,13 +120,13 @@ export class PubSub {
                 );
             })
             .onRemoteEndpointJoined(remoteEndpointId => {
-
+                logger.warn(`onRemoteEndpointJoined() is not defined`);
             })
             .onRemoteEndpointDetached(remoteEndpointId => {
-                
+                logger.warn(`onRemoteEndpointDetached() is not defined`);
             })
             .onPubSubSyncRequested(async promise => {
-                
+                logger.warn(`onPubSubSyncRequested() is not defined`);
             })
             .onChangedLeaderId(leaderId => {
                 if (!leaderId) {
