@@ -44,7 +44,7 @@ export class FollowerState extends RaccoonState {
     }
 
     public start() {
-
+        logger.info("Follower state starts");
     }
 
     public submit(message: Message): boolean {
@@ -134,7 +134,7 @@ export class FollowerState extends RaccoonState {
             // maybe we already voted for the candidate itself?
             voteGranted = props.votedFor === request.candidateId;
         }
-        var response = request.createResponse(voteGranted);
+        const response = request.createResponse(voteGranted);
         logger.info(`${this.getLocalPeerId()} send a vote response ${response}.`);
         this.sendVoteResponse(response);
     }
@@ -152,7 +152,7 @@ export class FollowerState extends RaccoonState {
         let currentTerm = props.currentTerm;
         if (requestChunk.term < currentTerm) {
             logger.warn(`Append entries request appeared from a previous term. currentTerm: ${currentTerm}, received entries request term: ${requestChunk.term}`);
-            var response = requestChunk.createResponse(false, -1, false);
+            const response = requestChunk.createResponse(false, -1, false);
             this.sendAppendEntriesResponse(response);
             return;
         }
@@ -183,7 +183,7 @@ export class FollowerState extends RaccoonState {
         if (requestChunk.entry === undefined && requestChunk.sequence === 0) {
             if (requestChunk.lastMessage === false) {
                 logger.warn(`Entries cannot be null if it is a part of chunks and thats not the last message`);
-                var response = requestChunk.createResponse(false, -1, true);
+                const response = requestChunk.createResponse(false, -1, true);
                 this.sendAppendEntriesResponse(response);
                 return;
             }
@@ -192,7 +192,7 @@ export class FollowerState extends RaccoonState {
                 // try to update if a sync is not in progress
                 this.updateCommitIndex(requestChunk.leaderCommit);
             }
-            var response = requestChunk.createResponse(true, logs.nextIndex, true);
+            const response = requestChunk.createResponse(true, logs.nextIndex, true);
             this.sendAppendEntriesResponse(response);
             return;
         }
@@ -205,7 +205,7 @@ export class FollowerState extends RaccoonState {
         }
         request.add(requestChunk);
         if (request.ready === false) {
-            var response = requestChunk.createResponse(true, -1, false);
+            const response = requestChunk.createResponse(true, -1, false);
             this.sendAppendEntriesResponse(response);
             return;
         }
@@ -219,7 +219,7 @@ export class FollowerState extends RaccoonState {
             }
 
             // until we do not sync we cannot process and go forward with our index
-            var response = requestChunk.createResponse(
+            const response = requestChunk.createResponse(
                     true,
                     logs.nextIndex,
                     true
@@ -242,12 +242,11 @@ export class FollowerState extends RaccoonState {
                 }).finally(() => this._syncRequested = false);
                 this._syncRequested = true;
             }
-            if (!this._receivedEndpointNotification) {
-
-            }
+            // if (!this._receivedEndpointNotification) {
+            // }
             // we send success and processed response as the problem is not with the request,
             // but we do not change our next index because we cannot process it momentary due to not synced endpoint
-            var response = requestChunk.createResponse(true, logs.nextIndex, true);
+            const response = requestChunk.createResponse(true, logs.nextIndex, true);
             this.sendAppendEntriesResponse(response);
             return;
         } else if (this._unsyncRaftLogsLogged) {
@@ -259,10 +258,10 @@ export class FollowerState extends RaccoonState {
         const localNextIndex = logs.nextIndex;
         let success = true;
         for (let i = 0; i < entryLength; ++i) {
-            var logIndex = request.leaderNextIndex - entryLength + i;
-            var entry = request.entries[i];
+            const logIndex = request.leaderNextIndex - entryLength + i;
+            const entry = request.entries[i];
             if (logIndex < localNextIndex) {
-                var oldLogEntry = logs.compareAndOverride(logIndex, currentTerm, entry);
+                const oldLogEntry = logs.compareAndOverride(logIndex, currentTerm, entry);
                 if (oldLogEntry != null && currentTerm < oldLogEntry.term) {
                     logger.warn(`We overrode an entry coming from a higher term we currently had. 
                         (currentTerm: ${currentTerm}, old log entry term: ${oldLogEntry.term}). This can cause a potential inconsistency if other peer has not override it as well`
@@ -274,7 +273,7 @@ export class FollowerState extends RaccoonState {
             }
         }
         this.updateCommitIndex(requestChunk.leaderCommit);
-        var response = requestChunk.createResponse(success, logs.nextIndex, true);
+        const response = requestChunk.createResponse(success, logs.nextIndex, true);
         this.sendAppendEntriesResponse(response);
     }
     
@@ -331,7 +330,7 @@ export class FollowerState extends RaccoonState {
     }
 
     private updateCommitIndex(leaderCommitIndex: number) {
-        const logs = this.logs;;
+        const logs = this.logs;
         if (leaderCommitIndex <= logs.commitIndex) {
             return;
         }

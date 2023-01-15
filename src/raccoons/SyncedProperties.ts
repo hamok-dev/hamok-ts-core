@@ -14,6 +14,13 @@ export class SyncedProperties {
         return this._currentTerm;
     }
 
+    public set currentTerm(value: number) {
+        if (value < this._currentTerm) {
+            logger.warn("Set current term smaller than the term stored before");
+        }
+        this._currentTerm = value;
+    }
+
     /* Volatile state on all servers: */
     /**
      * candidateId that received vote in current
@@ -23,6 +30,13 @@ export class SyncedProperties {
         return this._votedFor;
     }
 
+    public set votedFor(value: string | undefined) {
+        if (value !== undefined) {
+            this._votedFor = value;
+        } else {
+            this._votedFor = undefined;
+        }
+    }
 
     /**
      * index of highest log entry applied to state
@@ -58,18 +72,4 @@ export class SyncedProperties {
     private _nextIndex = new Map<string, number>();
     private _matchIndex = new Map<string, number>();
 
-    public set votedFor(value: string | undefined) {
-        if (value !== undefined) {
-            this._votedFor = value;
-        } else {
-            this._votedFor = undefined;
-        }
-    }
-
-    public set currentTerm(value: number) {
-        if (value < this._currentTerm) {
-            logger.warn("Set current term smaller than the term stored before");
-        }
-        this._currentTerm = value;
-    }
 }

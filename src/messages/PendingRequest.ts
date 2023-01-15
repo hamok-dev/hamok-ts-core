@@ -79,7 +79,7 @@ export class PendingRequest implements Promise<ReadonlyArray<Message>> {
     }
 
     private _id?: string;
-    private _postponeTimeout = false;
+    private _postponeTimeout: boolean;
     private _timedOut = false;
     private _timeoutInMs = 0;
     private _receivedResponses = 0;
@@ -90,7 +90,7 @@ export class PendingRequest implements Promise<ReadonlyArray<Message>> {
     private _timer?: ReturnType<typeof setTimeout>;
     private _promise?: CompletablePromise<Message[]>
     private constructor() {
-
+        this._postponeTimeout = false;
     }
     
     public get id(): string {
@@ -187,6 +187,7 @@ export class PendingRequest implements Promise<ReadonlyArray<Message>> {
         }
         const response = Array.from(this._responses.values());
         logger.trace(`Pending request is resolved by responses ${response}`);
+        /* eslint-disable @typescript-eslint/no-non-null-assertion */
         this._promise!.resolve(response);
     }
 

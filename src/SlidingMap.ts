@@ -50,14 +50,14 @@ export class SimpleSlidingMap<K, V> implements SlidingMap<K, V> {
     private _entries = new Map<K, V>();
     private _touches = new Map<K, number>();
     
-    private _createTimer = false;
+    private _createTimer: boolean;
     private _tickTimeInMs = 0;
     private _timer?: ReturnType<typeof setInterval>;
     private _maxTimeInMs = 0;
     private _maxEntries = 0;
 
     private constructor() {
-
+        this._createTimer = false;
     }
 
     public onExpiredEntry(listener: (key: K, value: V) => void): this {
@@ -159,6 +159,7 @@ export class SimpleSlidingMap<K, V> implements SlidingMap<K, V> {
             const value = this._entries.get(key);
             if (this.delete(key)) {
                 this._emitter.emit(EXPIRED_ENTRY_EVENT_NAME, key, value);
+                ++result;
             }
         }
         return result;
@@ -172,7 +173,7 @@ export class SimpleSlidingMap<K, V> implements SlidingMap<K, V> {
         const overflowed = this._maxEntries - this._entries.size;
         const sortedTouches = [...this._touches.entries()].sort((a, b) => a[1] - b[1]);
         for (let i = 0; i < overflowed && i < sortedTouches.length; ++i) {
-            const [key, touched] = sortedTouches[i];
+            const [key] = sortedTouches[i];
             result += this.delete(key) ? 1 : 0;
         }
         return result;

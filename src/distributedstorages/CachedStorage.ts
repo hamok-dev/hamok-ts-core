@@ -353,7 +353,10 @@ export class CachedStorage<K, V> implements Storage<K, V> {
     }
     
     public async *[Symbol.asyncIterator](): AsyncIterableIterator<[K, V]> {
-        return this._storage[Symbol.asyncIterator];
+        const iterator = this._storage[Symbol.asyncIterator]();
+        for await (const entry of iterator) {
+            yield entry;
+        }
     }
 
 }

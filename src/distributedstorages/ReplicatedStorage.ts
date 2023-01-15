@@ -1,11 +1,12 @@
 import { Collections, createLogger } from "@hamok-dev/common";
 import { Storage } from "../storages/Storage";
 import { StorageComlink, StorageComlinkConfig } from "../storages/StorageComlink";
-import { StorageEvents, StorageEventsImpl } from "../storages/StorageEvents";
+import { StorageEvents } from "../storages/StorageEvents";
 import { ReplicatedStorageBuilder } from "./ReplicatesStorageBuilder";
 
 const logger = createLogger("ReplicatedStorage");
 
+/* eslint-disable  @typescript-eslint/no-explicit-any */
 const logNotUsedAction = (context: string, obj: any) => {
     logger.warn(
         `${context}: Incoming message has not been processed, becasue the handler is not implemented`, 
@@ -141,12 +142,12 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                     notification,
                 );
             })
-            .onRemoteEndpointJoined(remoteEndpointId => {
+            // .onRemoteEndpointJoined(remoteEndpointId => {
+                
+            // })
+            // .onRemoteEndpointDetached(remoteEndpointId => {
 
-            })
-            .onRemoteEndpointDetached(remoteEndpointId => {
-
-            })
+            // })
             .onChangedLeaderId(async leaderId => {
                 if (leaderId === undefined) {
                     return;
@@ -157,10 +158,10 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                     await this._ongoingSync;
                     return;
                 }
-                this._ongoingSync = new Promise(async resolve => {
+                this._ongoingSync = new Promise(resolve => {
                     logger.info(`Storage ${this.id} is joining to the grid`);
                     this._standalone = false;
-                    await this._clearAndSetAllEntries()
+                    this._clearAndSetAllEntries().then(resolve)
                 });
                 this._ongoingSync.catch(err => {
                     logger.warn(`onChangedLeaderId(): Error occurred while performing operation`, err);
@@ -173,11 +174,8 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                     await this._ongoingSync;
                     return;
                 }
-                this._ongoingSync = new Promise(async resolve => {
-                    logger.info(`Storage ${this.id} is being synchronized`);
-                    await this._clearAndSetAllEntries()
-                    resolve();
-                });
+                logger.info(`Storage ${this.id} is being synchronized`);
+                this._ongoingSync = this._clearAndSetAllEntries();
                 this._ongoingSync.then(() => {
                     promise.resolve({
                         success: true,
@@ -196,13 +194,13 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
     }
 
     private _clearAndSetAllEntries(): Promise<void> {
-        return new Promise(async resolve => {
-            const keys = await this._storage.keys();
-            const entries = await this._storage.getAll(keys);
-            await this._storage.clear();
-            await this.setAll(entries);
-            resolve();
-        });
+        return this._storage.keys()
+            .then(keys => this._storage.getAll(keys))
+            .then(entries => new Promise<void>(resolve => {
+                this._storage.clear()
+                    .then(() => this.setAll(entries))
+                    .then(() => resolve())
+            }));
     }
 
     public get id(): string {
@@ -369,6 +367,9 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
     }
     
     public async *[Symbol.asyncIterator](): AsyncIterableIterator<[K, V]> {
-        return this._storage[Symbol.asyncIterator];
+        const iterator = this._storage[Symbol.asyncIterator]();
+        for await (const entry of iterator) {
+            yield entry;
+        }
     }
 }

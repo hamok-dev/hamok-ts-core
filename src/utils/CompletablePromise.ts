@@ -5,6 +5,7 @@ export enum CompletablePromiseState {
     PENDING,
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export class CompletablePromise<T = any> implements Promise<T> {
     private _promise: Promise<T>;
     private _resolve: (value: T) => void = () => undefined;
@@ -12,6 +13,7 @@ export class CompletablePromise<T = any> implements Promise<T> {
     private _state: CompletablePromiseState;
 
     public constructor() {
+        /* eslint-disable @typescript-eslint/no-this-alias */
         const that = this;
         this._promise = new Promise((resolve, reject) => {
             that._resolve = (data) => {
@@ -28,12 +30,14 @@ export class CompletablePromise<T = any> implements Promise<T> {
 
     public then<TResult1 = T, TResult2 = never>(
         onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+        /* eslint-disable @typescript-eslint/no-explicit-any */
         onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null
     ): Promise<TResult1 | TResult2> {
         return this._promise.then(onfulfilled, onrejected);
     }
 
     public catch<TResult = never>(
+        /* eslint-disable @typescript-eslint/no-explicit-any */
         onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | null
     ): Promise<T | TResult> {
         return this._promise.catch(onrejected);

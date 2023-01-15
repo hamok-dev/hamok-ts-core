@@ -234,32 +234,31 @@ export class HamokGrid {
         if (this._ongoingPromiseCommitSync) {
             return this._ongoingPromiseCommitSync;
         }
-        this._ongoingPromiseCommitSync = new Promise<number>(async (resolve, reject) => {
-            const leaderId = await this.promiseLeader();
-            const response = await this._dispatcher.requestStorageSync(new StorageSyncRequest(
+        this._ongoingPromiseCommitSync = this.promiseLeader()
+            .then(leaderId => this._dispatcher.requestStorageSync(new StorageSyncRequest(
                 uuid(),
                 leaderId,
                 this.localEndpointId
-            ));
-            if (response.commitIndex === undefined) {
-                reject(`Cannot sync without commitIndex`);
-                return;
-            }
-            const responseCommitIndex = response.commitIndex;
-            const started = Date.now();
-            const timer = setInterval(() => {
-                const actualCommitIndex = this._raccoon.logs.commitIndex;
-                if (actualCommitIndex < responseCommitIndex) {
-                    if (timeoutInMs && timeoutInMs <= Date.now() - started) {
-                        clearInterval(timer);
-                        reject(`Timeout`);
-                    }
+            ))).then(storageSync => new Promise<number>((resolve, reject) => {
+                if (storageSync.commitIndex === undefined) {
+                    reject(`Cannot sync without commitIndex`);
                     return;
                 }
-                clearInterval(timer);
-                resolve(actualCommitIndex);
-            }, 500);
-        });
+                const responseCommitIndex = storageSync.commitIndex;
+                const started = Date.now();
+                const timer = setInterval(() => {
+                    const actualCommitIndex = this._raccoon.logs.commitIndex;
+                    if (actualCommitIndex < responseCommitIndex) {
+                        if (timeoutInMs && timeoutInMs <= Date.now() - started) {
+                            clearInterval(timer);
+                            reject(`Timeout`);
+                        }
+                        return;
+                    }
+                    clearInterval(timer);
+                    resolve(actualCommitIndex);
+                }, 500);
+            }));
         this._ongoingPromiseCommitSync.finally(() => {
             this._ongoingPromiseCommitSync = undefined;
         });
@@ -344,7 +343,7 @@ export class HamokGrid {
             .setHamokGrid(this);
     }
 
-    public createPubSub<K, V>(): PubSubBuilder {
+    public createPubSub(): PubSubBuilder {
         return PubSub.builder()
             .setHamokGrid(this);
     }
@@ -374,7 +373,6 @@ export class HamokGrid {
     private _dispatch(message: Message) {
         // logger.info(`Received message`, message);
         switch(message.protocol) {
-            case undefined:
             case MessageProtocol.RAFT_COMMUNICATION_PROTOCOL:
                 this._raccoon.dispatchInboundMessage(message);
                 break;
@@ -418,6 +416,7 @@ export class HamokGrid {
     }
 
     private _createTransport(): GridTransportAbstract {
+        /* eslint-disable @typescript-eslint/no-this-alias */
         const grid = this;
         const localEndpointId = grid.localEndpointId;
         return new class extends GridTransportAbstract {
@@ -448,6 +447,7 @@ export class HamokGrid {
     }
 
     private _createGridDispatcher(): GridDispatcher {
+        /* eslint-disable @typescript-eslint/no-this-alias */
         const grid = this;
         const result = new class extends GridDispatcher {
             protected send(message: Message): void {
@@ -488,16 +488,11 @@ export class HamokGrid {
             }, timeoutInMs);
         }
         if (!this._ongoingStorageSync) {
-            this._ongoingStorageSync = new Promise<boolean>(async (resolve, reject) => {
-                const storageSyncResponse = await this._dispatcher.requestStorageSync(new StorageSyncRequest(
-                    uuid(),
-                    this.leaderId,
-                    this.localEndpointId,
-                )).catch(err => {
-                    logger.warn("sync(): Error occurred while executing storage sync", err);
-                    reject(err);
-                    return undefined;
-                });
+            this._ongoingStorageSync = this._dispatcher.requestStorageSync(new StorageSyncRequest(
+                uuid(),
+                this.leaderId,
+                this.localEndpointId,
+            )).then(storageSyncResponse => new Promise<boolean>((resolve) => {
                 if (!storageSyncResponse || 
                     storageSyncResponse.commitIndex === undefined || 
                     storageSyncResponse.numberOfLogs === undefined
@@ -522,8 +517,11 @@ export class HamokGrid {
                         logger.warn(`Failed sync`, err);
                         resolve(false);
                     });
-            });
-            this._ongoingStorageSync.finally(() => {
+            }));
+            this._ongoingStorageSync.catch(err => {
+                logger.warn("sync(): Error occurred while executing storage sync", err);
+                return undefined;
+            }).finally(() => {
                 this._ongoingStorageSync = undefined;
             })
         }

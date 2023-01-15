@@ -7,7 +7,10 @@ const logger = createLogger("MessageEmitter");
 const ENQUEUED_REQUEST_EVENT_NAME = `ENQUEUED_REQUEST_EVENT_NAME-${uuid()}`;
 const DEQUEUED_REQUEST_EVENT_NAME = `DEQUEUED_REQUEST_EVENT_NAME-${uuid()}`;
 
+// eslint-disable @typescript-eslint/no-explicit-any
 type AsyncListener = (...values: any[]) => Promise<void>;
+
+// eslint-disable @typescript-eslint/no-explicit-any
 type Listener = (...values: any[]) => void;
 
 export type RequestListener = (requestId: string, sourceEndpointId: string) => void;
@@ -16,6 +19,8 @@ export class MessageEmitter {
     private _emitter = new EventEmitter();
     private _index = 0;
     private _invocations = new Map<number, Promise<void>>();
+    
+    // eslint-disable @typescript-eslint/no-explicit-any
     private _blockingListeners = new Map<any, AsyncListener>();
 
     public get queueSize(): number {
@@ -46,6 +51,7 @@ export class MessageEmitter {
         return this;
     }
 
+    // eslint-disable @typescript-eslint/no-explicit-any
     public emit(event: string, ...args: any[]): this {
         // logger.info("emitted ", event, ...args);
         this._emitter.emit(event, ...args);
@@ -61,27 +67,35 @@ export class MessageEmitter {
      * everything which is added here executed one by one
      */
     public addBlockingListener(event: string, listener: AsyncListener): this {
+        // eslint-disable @typescript-eslint/no-explicit-any
         const mappedListener: AsyncListener = async (...values: any[]) => {
             const enqueued = 0 < this._invocations.size;
             const actualBlockingPoint = this.actualBlockingPoint;
             const index = ++this._index;
-            this._invocations.set(index, new Promise<void>(async resolve => {
+            this._invocations.set(index, new Promise<void>(resolve => {
                 // logger.info("Invocation for ", values);
+                let promise: Promise<void> | undefined;
                 if (enqueued) {
                     const [requestId, sourceEndpointId] = this._getRequestIdAndSourceEndpointId(...values);
                     this._emitEnqueuedRequest(requestId, sourceEndpointId);
                     logger.trace(`Invocation is enqueued for event ${event}, index: ${index}, queue size: ${this._invocations.size}`);
-                    await actualBlockingPoint;
-                    this._emitDequeuedRequest(requestId, sourceEndpointId);
-                    logger.trace(`Dequeued for event ${event}, index: ${index}, queue size: ${this._invocations.size}`);
+                    promise = actualBlockingPoint.then(() => new Promise(resolveBlocking => {
+                        this._emitDequeuedRequest(requestId, sourceEndpointId);
+                        logger.trace(`Dequeued for event ${event}, index: ${index}, queue size: ${this._invocations.size}`);
+                        resolveBlocking();
+                    }));
+                } else {
+                    promise = Promise.resolve();
                 }
-                // logger.info("emitting ", ...values);
-                listener(...values).catch((err) => {
-                    logger.warn(`Error occurred while invoking listener. arguments, error:`, values, err);
-                }).finally(() => {
-                    this._invocations.delete(index);
-                    resolve();
-                });
+                promise
+                    .then(() => listener(...values))
+                    .catch(err => {
+                        logger.warn(`Error occurred while invoking listener. arguments, error:`, values, err);
+                    })
+                    .finally(() => {
+                        this._invocations.delete(index);
+                        resolve();
+                    });
             }));
         };
         this._blockingListeners.set(listener, mappedListener);

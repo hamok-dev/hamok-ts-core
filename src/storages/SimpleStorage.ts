@@ -46,10 +46,10 @@ export class SimpleStorage<K, V> implements Storage<K, V> {
     }
 
     private _id?: string;
-    private _entries = new Map<K, V>();
+    private _entries: Map<K, V>;
     private _events = new StorageEventsImpl<K, V>();
     private constructor() {
-        
+        this._entries = new Map<K, V>();
     }
     public get id(): string {
         return this._id!;
@@ -271,7 +271,9 @@ export class SimpleStorage<K, V> implements Storage<K, V> {
     }
 
     public async *[Symbol.asyncIterator](): AsyncIterableIterator<[K, V]> {
-        return this._entries.entries();
+        for (const entry of this._entries.entries()) {
+            yield entry;
+        }
     }
 
 }

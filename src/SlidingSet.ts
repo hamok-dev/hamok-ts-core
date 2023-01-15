@@ -45,14 +45,14 @@ export class SimpleSlidingSet<T> implements SlidingSet<T> {
     private _emitter = new EventEmitter();
     private _entries = new Map<T, number>();
     
-    private _createTimer = false;
+    private _createTimer: boolean;
     private _tickTimeInMs = 0;
     private _timer?: ReturnType<typeof setInterval>;
     private _maxTimeInMs = 0;
     private _maxEntries = 0;
 
     private constructor() {
-
+        this._createTimer = false;
     }
 
     public onExpiredEntry(listener: (item: T) => void): this {
@@ -76,7 +76,7 @@ export class SimpleSlidingSet<T> implements SlidingSet<T> {
         }
         return result;
     }
-
+    /* eslint-disable @typescript-eslint/no-explicit-any */
     public forEach(callbackfn: (value: T, value2: T, set: Set<T>) => void, thisArg?: any): void {
         Collections.setFrom(this._entries.keys()).forEach(callbackfn, thisArg);
     }
@@ -143,6 +143,7 @@ export class SimpleSlidingSet<T> implements SlidingSet<T> {
             const value = this._entries.get(key);
             if (this.delete(key)) {
                 this._emitter.emit(EXPIRED_ENTRY_EVENT_NAME, key, value);
+                ++result;
             }
         }
         return result;
@@ -156,7 +157,7 @@ export class SimpleSlidingSet<T> implements SlidingSet<T> {
         const overflowed = this._maxEntries - this._entries.size;
         const sortedTouches = [...this._entries.entries()].sort((a, b) => a[1] - b[1]);
         for (let i = 0; i < overflowed && i < sortedTouches.length; ++i) {
-            const [key, touched] = sortedTouches[i];
+            const [key] = sortedTouches[i];
             result += this.delete(key) ? 1 : 0;
         }
         return result;
