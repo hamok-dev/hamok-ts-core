@@ -45,7 +45,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         comlink: StorageComlink<K, V>
     ) {
         this.config = config;
-        this._standalone = true;
+        this._standalone = comlink.remoteEndpointIds.size < 1;
         this._storage = storage;
         this._comlink = comlink
             .onClearEntriesRequest(async request => {
