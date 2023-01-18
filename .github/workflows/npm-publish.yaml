@@ -40,7 +40,7 @@ jobs:
       - name: Make snapshot version
         if: steps.job_context.outputs.branch != 'main'
         run: |
-          npm version ${{ steps.job_context.outputs.version }}-SNAPSHOT.${{ github.sha }}
+          npm version ${{ steps.job_context.outputs.version }}-SNAPSHOT.${{ github.sha }} --git-tag-version false
         working-directory: ${{env.working-directory}}
 
       - name: Publish package to latest
