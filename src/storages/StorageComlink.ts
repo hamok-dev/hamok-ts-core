@@ -664,7 +664,7 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
     }
 
     public sendInsertEntriesResponse(response: InsertEntriesResponse<K, V>): void {
-        const message = this._codec.encodeEvictEntriesResponse(response);
+        const message = this._codec.encodeInsertEntriesResponse(response);
         this._dispatchResponse(message);
     }
 
