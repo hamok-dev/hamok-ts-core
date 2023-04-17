@@ -4,6 +4,8 @@ import {
     createLogger,
     SubmitMessageRequest,
     StorageSyncRequest,
+    LogLevel,
+    setLogLevel,
 } from "@hamok-dev/common"
 import { GridDispatcher } from "./GridDispatcher";
 import { GridTransport, GridTransportAbstract } from "./GridTransport"
@@ -40,11 +42,12 @@ export interface PubSubSyncResult {
     errors?: string[]
 }
 
-export type HamokGridConfig = {
+type HamokGridConfig = {
     requestTimeoutInMs: number;
 }
 
-type HamokGridBuilderConfig = HamokGridConfig & RaccoonConfig & {
+export type HamokGridBuilderConfig = HamokGridConfig & RaccoonConfig & {
+    logLevel: LogLevel,
     raftLogExpirationTimeInMs: number;
 }
 
@@ -58,6 +61,7 @@ export class HamokGrid {
     public static builder(): HamokGridBuilder {
         const config: HamokGridBuilderConfig = {
             requestTimeoutInMs: 3000,
+            logLevel: 'warn',
             id: uuid(),
             electionTimeoutInMs: 1000,
             followerMaxIdleInMs: 1000,
@@ -85,10 +89,14 @@ export class HamokGrid {
                     raccoonBuilder.setLogBaseMap(raftLogBaseMap);
                 }
                 raccoonBuilder.setLogExpirationTime(config.raftLogExpirationTimeInMs);
+                
+                setLogLevel(config.logLevel);
+
                 return new HamokGrid(
                     raccoonBuilder.build(),
                     config
                 );
+                
             }
 
         }

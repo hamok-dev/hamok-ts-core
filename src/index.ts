@@ -1,6 +1,6 @@
 export { 
     HamokGrid,
-    HamokGridConfig,
+    HamokGridBuilderConfig,
 } from "./HamokGrid";
 
 export { 

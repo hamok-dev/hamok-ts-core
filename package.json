@@ -24,7 +24,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@bufbuild/protobuf": "^1.0.0",
-    "@hamok-dev/common": "1.0.0-rc.0",
+    "@hamok-dev/common": "1.0.1-0abd76c.0",
     "@types/events": "^3.0.0",
     "@types/uuid": "^8.3.4",
     "uuid": "^8.3.2"
