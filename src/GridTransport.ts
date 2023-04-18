@@ -11,7 +11,7 @@ const logger = createLogger("GridTransport");
 export type MessageListener = (message: Message) => void;
 export interface GridTransport {
     readonly receiver: MessageListener;
-    sender: MessageListener;
+    sender: MessageListener | undefined;
     send(message: Message): void;
     receive(message: Message): void;
     // sender(listener: MessageBytesListener): void;
@@ -21,7 +21,7 @@ export abstract class GridTransportAbstract implements GridTransport {
     private _sender?: MessageListener;
     private _noSenderAvailable = false;
 
-    public set sender(listener: MessageListener) {
+    public set sender(listener: MessageListener | undefined) {
         if (this._sender) {
             logger.warn("sender is assigned more than once. Only the last assign will be used");
         }
