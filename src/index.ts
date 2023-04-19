@@ -13,6 +13,10 @@ export {
     SeparatedStorageConfig,
 } from "./distributedstorages/SeparatedStorage";
 
+export {
+    SeparatedStorageBuildingConfig
+} from "./distributedstorages/SeparatedStorageBuilder";
+
 export { 
     SegmentedStorage,
     SegmentedStorageConfig,

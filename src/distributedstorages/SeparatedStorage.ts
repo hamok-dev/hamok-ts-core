@@ -221,8 +221,9 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
             return localEntries;
         }
         const requests = Collections.splitSet<K>(keys, this.config.maxKeys, () => [keys])
-            .map(chunk => this._comlink.requestGetEntries(chunk))
-            ;
+            .map(chunk => this._comlink.requestGetEntries(chunk),
+            () => [keys]
+        );
         const result = new Map<K, V>(localEntries);
         (await Promise.all(requests))
             .forEach(entries => Collections.reduceMaps(

@@ -254,7 +254,8 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitMap<K, V>(
             entries,
-            Math.min(this.config.maxKeys, this.config.maxValues)
+            Math.min(this.config.maxKeys, this.config.maxValues),
+            () => [entries]
         ).map(batchedEntries => this._comlink.requestUpdateEntries(
             batchedEntries,
             Collections.setOf(this._comlink.localEndpointId)
@@ -281,7 +282,8 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitMap<K, V>(
             entries,
-            Math.min(this.config.maxKeys, this.config.maxValues)
+            Math.min(this.config.maxKeys, this.config.maxValues),
+            () => [entries]
         ).map(batchedEntries => this._comlink.requestInsertEntries(
             batchedEntries,
             Collections.setOf(this._comlink.localEndpointId)
@@ -308,7 +310,8 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitSet<K>(
             keys,
-            Math.min(this.config.maxKeys, this.config.maxValues)
+            Math.min(this.config.maxKeys, this.config.maxValues),
+            () => [keys]
         ).map(batchedEntries => this._comlink.requestDeleteEntries(
             batchedEntries,
             Collections.setOf(this._comlink.localEndpointId)
@@ -334,7 +337,8 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitSet<K>(
             keys,
-            Math.min(this.config.maxKeys, this.config.maxValues)
+            Math.min(this.config.maxKeys, this.config.maxValues),
+            () => [keys]
         ).map(batchedEntries => this._comlink.requestDeleteEntries(
             batchedEntries,
             Collections.setOf(this._comlink.localEndpointId)
