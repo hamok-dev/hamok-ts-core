@@ -38,6 +38,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
     private _storage: Storage<K, V>;
     private _comlink: StorageComlink<K, V>;
     private _ongoingSync?: Promise<void>;
+    private _actualLeaderId?: string;
 
     public constructor(
         config: ReplicatedStorageConfig,
@@ -56,10 +57,11 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                 }
             })
             .onClearEntriesNotification(async notification => {
-                logNotUsedAction(
-                    "onClearEntriesNotification", 
-                    notification
-                );
+                // logNotUsedAction(
+                //     "onClearEntriesNotification", 
+                //     notification
+                // );
+                // throw new Error(`Not implemented`);
             })
             .onGetEntriesRequest(async request => {
                 const foundEntries = await this._storage.getAll(request.keys);
@@ -149,6 +151,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
 
             // })
             .onChangedLeaderId(async leaderId => {
+                this._actualLeaderId = leaderId;
                 if (leaderId === undefined) {
                     return;
                 }
@@ -158,10 +161,13 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                     await this._ongoingSync;
                     return;
                 }
-                this._ongoingSync = new Promise(resolve => {
+                this._ongoingSync = new Promise<void>(resolve => {
                     logger.info(`Storage ${this.id} is joining to the grid`);
                     this._standalone = false;
-                    this._clearAndSetAllEntries().then(resolve)
+                    this._storage.keys()
+                        .then(keys => this._storage.getAll(keys))
+                        .then(entries => this.setAll(entries))
+                        .then(() => resolve())
                 });
                 this._ongoingSync.catch(err => {
                     logger.warn(`onChangedLeaderId(): Error occurred while performing operation`, err);
@@ -170,12 +176,14 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                 });
             })
             .onStorageSyncRequested(async promise => {
-                if (this._ongoingSync) {
-                    await this._ongoingSync;
+                if (!this._actualLeaderId) {
+                    promise.reject(new Error(`Cannot perform a storage sync without a leader`));
                     return;
                 }
                 logger.info(`Storage ${this.id} is being synchronized`);
-                this._ongoingSync = this._clearAndSetAllEntries();
+                if (!this._ongoingSync) {
+                    this._ongoingSync = this._evictAndRestoreAllEntries();
+                }
                 this._ongoingSync.then(() => {
                     promise.resolve({
                         success: true,
@@ -193,14 +201,19 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
             ;
     }
 
-    private _clearAndSetAllEntries(): Promise<void> {
-        return this._storage.keys()
-            .then(keys => this._storage.getAll(keys))
-            .then(entries => new Promise<void>(resolve => {
-                this._storage.clear()
-                    .then(() => this.setAll(entries))
-                    .then(() => resolve())
-            }));
+    private async _evictAndRestoreAllEntries(): Promise<void> {
+        if (!this._actualLeaderId) {
+            throw new Error(`Cannot execute storage sync without leaderId`);
+            return;
+        }
+        // evict all entries from local storage
+        const [localKeys, leaderKeys] = await Promise.all([
+            this._storage.keys(),
+            this._comlink.requestGetKeys(Collections.setOf(this._actualLeaderId))
+        ]);
+        const leaderEntries = await this._comlink.requestGetEntries(leaderKeys, Collections.setOf(this._actualLeaderId));
+        await this._storage.evictAll(localKeys);
+        this._storage.restoreAll(leaderEntries)
     }
 
     public get id(): string {
@@ -227,7 +240,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         if (this._standalone) {
             return this._storage.clear();
         }
-        return this._comlink.requestClearEntries();
+        return this._comlink.requestClearEntries(Collections.setOf(this._comlink.localEndpointId));
     }
 
     public async get(key: K): Promise<V | undefined> {

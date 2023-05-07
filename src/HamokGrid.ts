@@ -70,6 +70,8 @@ export class HamokGrid {
             peerMaxIdleTimeInMs: 5000,
             
             raftLogExpirationTimeInMs: 5 * 60 * 1000,
+
+            fullCommit: false,
         };
         let raftLogBaseMap: Map<number, LogEntry> | undefined;
         
@@ -178,7 +180,7 @@ export class HamokGrid {
                 logger.info(`onChangedLeaderId(): Sync is finished`);
             }
         }).onCommittedEntry(message => {
-            // logger.info(`Received committed message`, message);
+            // console.warn(`Received committed message`, message);
             // this._transport.receive(message);
             this._dispatch(message);
         })
@@ -361,7 +363,12 @@ export class HamokGrid {
     }
 
     public removeStorageLink(storageId: string): void {
+        const comlink = this._storageLinks.get(storageId);
+        if (!comlink) {
+            return;
+        }
         this._storageLinks.delete(storageId);
+        comlink.close();
     }
 
     public addPubSubLink(pubSubLink: PubSubGridLink): void {

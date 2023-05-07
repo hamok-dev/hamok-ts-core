@@ -37,12 +37,12 @@ export class TextCodec implements Codec<string, Uint8Array> {
     }
 
     encode(data: string): Uint8Array {
-        const buffer = Buffer.from(data, "utf-8");
+        const buffer = Buffer.from(data, this._config.textEncoding);
         return Uint8Array.from(buffer);
     }
 
     decode(data: Uint8Array): string {
         const buffer = Buffer.from(data);
-        return buffer.toString("utf-8");
+        return buffer.toString(this._config.textEncoding);
     }
 }

@@ -22,11 +22,11 @@ export abstract class GridTransportAbstract implements GridTransport {
     private _noSenderAvailable = false;
 
     public set sender(listener: MessageListener | undefined) {
-        if (this._sender) {
+        if (this._sender && listener !== undefined) {
             logger.warn("sender is assigned more than once. Only the last assign will be used");
         }
         this._sender = listener;
-        this._noSenderAvailable = false;
+        this._noSenderAvailable = this._sender !== undefined;
     }
 
     public send(message: Message): void {

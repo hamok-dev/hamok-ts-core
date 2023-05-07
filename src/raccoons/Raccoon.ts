@@ -64,7 +64,7 @@ export interface Raccoon {
     onStorageSyncRequested(listener: StorageSyncRequestedListener): Raccoon;
     offStorageSyncRequested(listener: StorageSyncRequestedListener): Raccoon;
     
-    submit(message: Message): boolean;
+    submit(message: Message, fullCommit?: boolean): boolean;
 
     addRemotePeerId(peerId: string): void;
     removeRemotePeerId(peerId: string): void;
@@ -102,6 +102,10 @@ export type RaccoonConfig = {
     heartbeatInMs: number,
     sendingHelloTimeoutInMs: number,
     peerMaxIdleTimeInMs: number;
+    /**
+     * If this flag is true, then commits only happens when all followers append the logs
+     */
+    fullCommit: boolean,
 }
 
 interface Builder {
@@ -122,6 +126,7 @@ export class RaccoonImpl implements Raccoon {
             heartbeatInMs: 150,
             sendingHelloTimeoutInMs: 5000,
             peerMaxIdleTimeInMs: 10000,
+            fullCommit: false,
         };
         const result: Builder = {
             setConfig: (partialConfig: Partial<RaccoonConfig>) => {
@@ -299,6 +304,7 @@ export class RaccoonImpl implements Raccoon {
             logger.warn(`Attempted to start Raccoon twice`);
             return;
         }
+        // console.warn(`Start racoon`)
         const base = this._createRaccoonBase();
         const followerState = new FollowerState(base, 0);
         base.changeState(followerState);

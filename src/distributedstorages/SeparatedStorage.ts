@@ -2,7 +2,7 @@ import { Collections, createLogger } from "@hamok-dev/common";
 import { StorageSyncResult } from "../HamokGrid";
 import { Storage } from "../storages/Storage";
 import { StorageComlink } from "../storages/StorageComlink";
-import { StorageEvents, StorageEventsImpl } from "../storages/StorageEvents";
+import { StorageEvents } from "../storages/StorageEvents";
 import { BatchIterator } from "./BatchIterator";
 import { SeparatedStorageBuilder } from "./SeparatedStorageBuilder";
 
@@ -35,18 +35,12 @@ export class SeparatedStorage<K, V> implements Storage<K, V> {
         return new SeparatedStorageBuilder<U, R>();
     }
 
-    private _storage: Storage<K, V>;
-    private _comlink: StorageComlink<K, V>;
-    public readonly config: SeparatedStorageConfig;
-
     public constructor(
-        storage: Storage<K, V>,
-        comlink: StorageComlink<K, V>,
-        config: SeparatedStorageConfig
+        private _storage: Storage<K, V>,
+        private _comlink: StorageComlink<K, V>,
+        public readonly config: SeparatedStorageConfig
     ) {
-        this.config = config;
-        this._storage = storage;
-        this._comlink = comlink
+        this._comlink
             .onClearEntriesRequest(async request => {
                 const response = request.createResponse();
                 this._storage.clear();
