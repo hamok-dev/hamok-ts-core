@@ -195,19 +195,6 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
         this._responseChunker = responseChunker;
         this._receiver = this._createReceiver();
 
-        this._grid.onLeaderChanged(event => {
-            const { actualLeaderId } = event;
-            this._emitter.emit(CHANGED_LEADER_ID_EVENT_NAME, actualLeaderId);
-        }).onRemoteEndpointDetached(remoteEndpointId => {
-            for (const pendingRequest of this._pendingRequests.values()) {
-                pendingRequest.removeEndpointId(remoteEndpointId);
-            }
-            for (const [key, pendingResponse] of Array.from(this._pendingResponses)) {
-                if (pendingResponse.sourceEndpointId === remoteEndpointId) {
-                    this._pendingResponses.delete(key);
-                }
-            }
-        });
         const onLeaderChanged: Parameters<typeof grid.onLeaderChanged>[0] = event => {
             const { actualLeaderId } = event;
             this._emitter.emit(CHANGED_LEADER_ID_EVENT_NAME, actualLeaderId);
@@ -215,6 +202,9 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
         this._grid.onLeaderChanged(onLeaderChanged);
 
         const onRemoteEndpointDetached: Parameters<typeof grid.onRemoteEndpointDetached>[0] = remoteEndpointId => {
+            for (const pendingRequest of this._pendingRequests.values()) {
+                pendingRequest.removeEndpointId(remoteEndpointId);
+            }
             this._emitter.emit(REMOTE_ENDPOINT_DETACHED_EVENT_NAME, remoteEndpointId);
         };
         this._grid.onRemoteEndpointDetached(onRemoteEndpointDetached);
@@ -359,23 +349,23 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
 
     public onGetKeysRequest(listener: GetKeysRequestListener): StorageComlink<K, V> {
         const onEvent = this._getOnEvent(this._config.synchronize.getKeys);
-        onEvent(GET_SIZE_REQUEST, listener);
+        onEvent(GET_KEYS_REQUEST, listener);
         return this;
     }
 
     public offGetKeysRequest(listener: GetKeysRequestListener): StorageComlink<K, V> {
-        this._emitter.removeListener(GET_SIZE_REQUEST, listener);
+        this._emitter.removeListener(GET_KEYS_REQUEST, listener);
         return this;
     }
 
     public onGetSizeRequest(listener: GetSizeRequestListener): StorageComlink<K, V> {
         const onEvent = this._getOnEvent(this._config.synchronize.getSize);
-        onEvent(GET_KEYS_REQUEST, listener);
+        onEvent(GET_SIZE_REQUEST, listener);
         return this;
     }
 
     public offGetSizeRequest(listener: GetSizeRequestListener): StorageComlink<K, V> {
-        this._emitter.removeListener(GET_KEYS_REQUEST, listener);
+        this._emitter.removeListener(GET_SIZE_REQUEST, listener);
         return this;
     }
 
@@ -543,10 +533,13 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
     ): Promise<ReadonlySet<K>> {
         const requestId = uuid();
         const request = this._codec.encodeGetKeysRequest(
-            new GetKeysRequest(requestId,)
+            new GetKeysRequest(requestId)
         );
         const result = new Set<K>();
         (await this._request(request, targetEndpointIds))
+            .map(response => {
+                return response;
+            })
             .map(response => this._codec.decodeGetKeysResponse(response))
             .forEach(response => Collections.concatSet(
                 result,
@@ -760,7 +753,6 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
             logger.warn(`Pending Request was already exists for requestId ${pendingRequest.id}`);
         }
         this._pendingRequests.set(pendingRequest.id, pendingRequest);
-        // console.warn(`Dispatch`, destinationEndpointIds, message);
         this._dispatchRequest(message, destinationEndpointIds);
         const tried = attempt ?? 0;
         return pendingRequest.then(responses => {
@@ -883,7 +875,6 @@ export abstract class StorageComlink<K, V> implements StorageGridLink {
         }
         const chunkedResponse = message.sequence !== undefined && message.lastMessage !== undefined;
         const onlyOneChunkExists = message.sequence === 0 && message.lastMessage === true;
-        // console.warn("_responseReceived ", message);
         if (chunkedResponse && !onlyOneChunkExists) {
             const pendingResponseId = `${message.sourceId}#${message.requestId}`;
             let pendingResponse = this._pendingResponses.get(pendingResponseId);

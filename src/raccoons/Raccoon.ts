@@ -187,6 +187,13 @@ export class RaccoonImpl implements Raccoon {
             .onInboundRaftAppendEntriesResponse(response => {
                 this._state?.receiveAppendEntriesResponse(response);
             });
+            this._remotePeers
+                .onRemoteEndpointJoined((remoteEndpointId) => {
+                    this._emitter.emit(JOINED_REMOTE_PEER_EVENT_NAME, remoteEndpointId);
+                })
+                .onRemoteEndpointDetached((remoteEndpointId) => {
+                    this._emitter.emit(DETACHED_REMOTE_PEER_EVENT_NAME, remoteEndpointId);
+                });
     }
 
     public onOutboundMessage(listener: OutboundMessageListener): this {

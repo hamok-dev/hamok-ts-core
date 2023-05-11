@@ -158,7 +158,6 @@ export class HamokGrid {
         this._transport = this._createTransport();
         this._raccoon.onOutboundMessage(message => {
             message.protocol = MessageProtocol.RAFT_COMMUNICATION_PROTOCOL;
-            // console.warn("message", message);
             this._send(message);
         }).onStorageSyncRequested(promise => {
             logger.info("StorageSync is requested");
@@ -176,11 +175,12 @@ export class HamokGrid {
             if (actualLeaderId !== this.localEndpointId) {
                 this.sync(120 * 1000).catch(err => {
                     logger.warn(`onChangedLeaderId(): Synchronization failed`, err);
+                }).then(() => {
+                    logger.info(`onChangedLeaderId(): Sync is finished`);
                 });
-                logger.info(`onChangedLeaderId(): Sync is finished`);
             }
         }).onCommittedEntry(message => {
-            // console.warn(`Received committed message`, message);
+            // console.warn(`Received committed message`, this.localEndpointId, message);
             // this._transport.receive(message);
             this._dispatch(message);
         })
@@ -240,9 +240,12 @@ export class HamokGrid {
         return this._ongoingPromiseLeader;
     }
 
-    public async promiseCommitSync(timeoutInMs?: number): Promise<number> {
+    public async promiseCommitSync(promiseLeader = false, timeoutInMs?: number): Promise<number> {
         if (this._ongoingPromiseCommitSync) {
             return this._ongoingPromiseCommitSync;
+        }
+        if (!promiseLeader && !this._raccoon.leaderId) {
+            return -1;
         }
         this._ongoingPromiseCommitSync = this.promiseLeader()
             .then(leaderId => this._dispatcher.requestStorageSync(new StorageSyncRequest(
@@ -516,9 +519,10 @@ export class HamokGrid {
                     resolve(false);
                     return;
                 }
+                // console.warn("sync()", this.localEndpointId, this._raccoon.logs, storageSyncResponse, storageSyncResponse.commitIndex - storageSyncResponse.numberOfLogs <= this._raccoon.commitIndex);
                 if (storageSyncResponse.commitIndex - storageSyncResponse.numberOfLogs <= this._raccoon.commitIndex) {
                     // the storage grid is in sync (theoretically)
-                    logger.info(`Sync ended, because it does not require total sync. 
+                    logger.debug(`Sync ended, because it does not require total sync. 
                         The commitIndex is ${this._raccoon.commitIndex}, 
                         the leader commitIndex is ${storageSyncResponse.commitIndex} and the number of logs the 
                         leader has ${storageSyncResponse.numberOfLogs}, should be sufficient`
