@@ -93,7 +93,7 @@ export class CandidateState extends RaccoonState {
                         this.getLocalPeerId(),
                     );
                     this.sendVoteRequest(request);
-                    logger.info("Send vote request to {} after the candidacy has been started", request);
+                    logger.debug("Send vote request to {} after the candidacy has been started", request);
                 }
             }
         }
@@ -136,7 +136,7 @@ export class CandidateState extends RaccoonState {
                         this.getLocalPeerId(),
                 );
                 this.sendVoteRequest(request);
-                logger.info(`Send vote request to`, request);
+                logger.debug(`Send vote request to`, request);
                 this._notifiedRemotePeers.add(peerId);
             }
             this._started = Date.now();

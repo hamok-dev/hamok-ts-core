@@ -1,6 +1,6 @@
 {
   "name": "@hamok-dev/hamok-js-core",
-  "version": "0.9.0-beta",
+  "version": "1.0.1",
   "description": "Distributed Object Storage for NodeJS",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -23,8 +23,8 @@
   "author": "Balazs Kreith",
   "license": "Apache-2.0",
   "dependencies": {
-    "@bufbuild/protobuf": "^1.0.0",
-    "@hamok-dev/common": "1.0.0-rc.0",
+    "@bufbuild/protobuf": "1.0.0",
+    "@hamok-dev/common": "1.0.1-0abd76c.0",
     "@types/events": "^3.0.0",
     "@types/uuid": "^8.3.4",
     "uuid": "^8.3.2"

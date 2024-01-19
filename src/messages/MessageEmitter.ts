@@ -1,4 +1,4 @@
-import { EventEmitter } from "ws";
+import { EventEmitter } from "events";
 import { v4 as uuid } from "uuid";
 import { createLogger } from "@hamok-dev/common";
 
@@ -14,6 +14,17 @@ type AsyncListener = (...values: any[]) => Promise<void>;
 type Listener = (...values: any[]) => void;
 
 export type RequestListener = (requestId: string, sourceEndpointId: string) => void;
+
+// export interface MessageEmitterEvents {
+//     'enqueued-request': {
+//         requestId: string,
+//         sourceEndpointId: string,
+//     },
+//     'dequeued-request': {
+//         requestId: string,
+//         sourceEndpointId: string,
+//     }
+// }
 
 export class MessageEmitter {
     private _emitter = new EventEmitter();
@@ -63,6 +74,14 @@ export class MessageEmitter {
         return this;
     }
 
+    public async clear(): Promise<void> {
+        this._emitter.eventNames().forEach(eventName => this._emitter.removeAllListeners(eventName));
+        await this.actualBlockingPoint;
+        this._blockingListeners.clear();
+        this._invocations.clear();
+        this._index = 0;
+    }
+
     /**
      * everything which is added here executed one by one
      */
@@ -107,8 +126,6 @@ export class MessageEmitter {
         const actualListener = this._blockingListeners.get(listener) ?? listener;
         this._emitter.removeListener(event, actualListener);
         return this;
-
-        
     }
 
     public removeAllListeners(event?: string): this {

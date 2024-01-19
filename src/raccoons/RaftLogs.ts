@@ -181,7 +181,7 @@ export class RaftLogs {
         }
         if (0 < missingEntries) {
             if (!this._mssingEntriesLogged) {
-                logger.warn("Requested to collect entries, startIndex: {}, endIndex: {}, but missing {} entries probably in the beginning. The other peer should request a commit sync", startIndex, this.nextIndex, missingEntries);
+                logger.warn(`Requested to collect entries, startIndex: ${startIndex}, endIndex: ${this.nextIndex}, but missing ${missingEntries} entries probably in the beginning. The other peer should request a commit sync`);
                 this._mssingEntriesLogged = true;
             }
         } else if (this._mssingEntriesLogged) {
@@ -242,6 +242,7 @@ export class RaftLogs {
         if (expiredLogIndex < 0) {
             return;
         }
+        // console.warn("EXPIRED", expiredLogIndex, this._lastApplied);
         if (this._nextIndex <= expiredLogIndex || expiredLogIndex < this._lastApplied) {
             return;
         }

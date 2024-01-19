@@ -1,5 +1,5 @@
 import { Collections, createLogger, PublishCustomDataNotification } from "@hamok-dev/common";
-import { EventEmitter } from "ws";
+import { EventEmitter } from "events";
 import { PubSubBuilder } from "./PubSubBuilder";
 import { PubSubComlink, PubSubComlinkConfig } from "./PubSubComlink";
 

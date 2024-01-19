@@ -1,6 +1,6 @@
 export { 
     HamokGrid,
-    HamokGridConfig,
+    HamokGridBuilderConfig,
 } from "./HamokGrid";
 
 export { 
@@ -12,6 +12,10 @@ export {
     SeparatedStorage,
     SeparatedStorageConfig,
 } from "./distributedstorages/SeparatedStorage";
+
+export {
+    SeparatedStorageBuildingConfig
+} from "./distributedstorages/SeparatedStorageBuilder";
 
 export { 
     SegmentedStorage,

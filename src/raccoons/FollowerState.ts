@@ -44,7 +44,7 @@ export class FollowerState extends RaccoonState {
     }
 
     public start() {
-        logger.info("Follower state starts");
+        logger.debug("Follower state starts");
     }
 
     public submit(message: Message): boolean {
@@ -135,7 +135,7 @@ export class FollowerState extends RaccoonState {
             voteGranted = props.votedFor === request.candidateId;
         }
         const response = request.createResponse(voteGranted);
-        logger.info(`${this.getLocalPeerId()} send a vote response ${response}.`);
+        logger.debug(`${this.getLocalPeerId()} send a vote response ${response}.`);
         this.sendVoteResponse(response);
     }
     

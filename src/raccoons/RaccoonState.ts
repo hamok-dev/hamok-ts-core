@@ -43,6 +43,10 @@ export abstract class RaccoonState {
         return this.base.remotePeers;
     }
 
+    protected get fullCommit(): boolean {
+        return this.base.config.fullCommit;
+    }
+
     protected getLocalPeerId(): string {
         return this.base.localPeerId;
     }

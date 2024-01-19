@@ -191,7 +191,10 @@ export class LeaderState extends RaccoonState {
                 remotePeerIds: ${remotePeerIds.size} 
                 commit: ${remotePeerIds.size + 1 < matchCount * 2}`
             );
-            if (remotePeerIds.size + 1 < matchCount * 2) {
+            const doCommit = this.fullCommit
+                ? remotePeerIds.size <= matchCount
+                : remotePeerIds.size + 1 < matchCount * 2;
+            if (doCommit) {
                 maxCommitIndex = Math.max(maxCommitIndex, logEntry.index);
             }
         }

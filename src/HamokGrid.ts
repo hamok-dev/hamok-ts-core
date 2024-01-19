@@ -4,6 +4,8 @@ import {
     createLogger,
     SubmitMessageRequest,
     StorageSyncRequest,
+    LogLevel,
+    setLogLevel,
 } from "@hamok-dev/common"
 import { GridDispatcher } from "./GridDispatcher";
 import { GridTransport, GridTransportAbstract } from "./GridTransport"
@@ -40,11 +42,12 @@ export interface PubSubSyncResult {
     errors?: string[]
 }
 
-export type HamokGridConfig = {
+type HamokGridConfig = {
     requestTimeoutInMs: number;
 }
 
-type HamokGridBuilderConfig = HamokGridConfig & RaccoonConfig & {
+export type HamokGridBuilderConfig = HamokGridConfig & RaccoonConfig & {
+    logLevel: LogLevel,
     raftLogExpirationTimeInMs: number;
 }
 
@@ -58,6 +61,7 @@ export class HamokGrid {
     public static builder(): HamokGridBuilder {
         const config: HamokGridBuilderConfig = {
             requestTimeoutInMs: 3000,
+            logLevel: 'warn',
             id: uuid(),
             electionTimeoutInMs: 1000,
             followerMaxIdleInMs: 1000,
@@ -66,6 +70,8 @@ export class HamokGrid {
             peerMaxIdleTimeInMs: 5000,
             
             raftLogExpirationTimeInMs: 5 * 60 * 1000,
+
+            fullCommit: false,
         };
         let raftLogBaseMap: Map<number, LogEntry> | undefined;
         
@@ -85,10 +91,14 @@ export class HamokGrid {
                     raccoonBuilder.setLogBaseMap(raftLogBaseMap);
                 }
                 raccoonBuilder.setLogExpirationTime(config.raftLogExpirationTimeInMs);
+                
+                setLogLevel(config.logLevel);
+
                 return new HamokGrid(
                     raccoonBuilder.build(),
                     config
                 );
+                
             }
 
         }
@@ -148,7 +158,6 @@ export class HamokGrid {
         this._transport = this._createTransport();
         this._raccoon.onOutboundMessage(message => {
             message.protocol = MessageProtocol.RAFT_COMMUNICATION_PROTOCOL;
-            // console.warn("message", message);
             this._send(message);
         }).onStorageSyncRequested(promise => {
             logger.info("StorageSync is requested");
@@ -166,11 +175,12 @@ export class HamokGrid {
             if (actualLeaderId !== this.localEndpointId) {
                 this.sync(120 * 1000).catch(err => {
                     logger.warn(`onChangedLeaderId(): Synchronization failed`, err);
+                }).then(() => {
+                    logger.info(`onChangedLeaderId(): Sync is finished`);
                 });
-                logger.info(`onChangedLeaderId(): Sync is finished`);
             }
         }).onCommittedEntry(message => {
-            // logger.info(`Received committed message`, message);
+            // console.warn(`Received committed message`, this.localEndpointId, message);
             // this._transport.receive(message);
             this._dispatch(message);
         })
@@ -230,9 +240,12 @@ export class HamokGrid {
         return this._ongoingPromiseLeader;
     }
 
-    public async promiseCommitSync(timeoutInMs?: number): Promise<number> {
+    public async promiseCommitSync(promiseLeader = false, timeoutInMs?: number): Promise<number> {
         if (this._ongoingPromiseCommitSync) {
             return this._ongoingPromiseCommitSync;
+        }
+        if (!promiseLeader && !this._raccoon.leaderId) {
+            return -1;
         }
         this._ongoingPromiseCommitSync = this.promiseLeader()
             .then(leaderId => this._dispatcher.requestStorageSync(new StorageSyncRequest(
@@ -353,7 +366,12 @@ export class HamokGrid {
     }
 
     public removeStorageLink(storageId: string): void {
+        const comlink = this._storageLinks.get(storageId);
+        if (!comlink) {
+            return;
+        }
         this._storageLinks.delete(storageId);
+        comlink.close();
     }
 
     public addPubSubLink(pubSubLink: PubSubGridLink): void {
@@ -454,7 +472,9 @@ export class HamokGrid {
                 message.protocol = MessageProtocol.GRID_COMMUNICATION_PROTOCOL;
                 grid._send(message);
             }
-        }
+        }(
+            this.config.requestTimeoutInMs,
+        )
         return result;
     }
 
@@ -501,9 +521,10 @@ export class HamokGrid {
                     resolve(false);
                     return;
                 }
+                // console.warn("sync()", this.localEndpointId, this._raccoon.logs, storageSyncResponse, storageSyncResponse.commitIndex - storageSyncResponse.numberOfLogs <= this._raccoon.commitIndex);
                 if (storageSyncResponse.commitIndex - storageSyncResponse.numberOfLogs <= this._raccoon.commitIndex) {
                     // the storage grid is in sync (theoretically)
-                    logger.info(`Sync ended, because it does not require total sync. 
+                    logger.debug(`Sync ended, because it does not require total sync. 
                         The commitIndex is ${this._raccoon.commitIndex}, 
                         the leader commitIndex is ${storageSyncResponse.commitIndex} and the number of logs the 
                         leader has ${storageSyncResponse.numberOfLogs}, should be sufficient`

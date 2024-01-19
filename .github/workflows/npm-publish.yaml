@@ -40,7 +40,7 @@ jobs:
       - name: Make snapshot version
         if: steps.job_context.outputs.branch != 'main'
         run: |
-          npm version prerelease --preid=rc --git-tag-version false
+          npm version ${{ steps.job_context.outputs.version }}-SNAPSHOT.${{ github.sha }} --git-tag-version false
         working-directory: ${{env.working-directory}}
 
       - name: Publish package to latest
@@ -57,6 +57,6 @@ jobs:
         working-directory: ${{env.working-directory}}
         run: |
           npm config set //registry.npmjs.org/:_authToken ${NPM_TOKEN}
-          npm publish --ignore-scripts --access public  --tag $(echo "develop-${{ steps.job_context.outputs.version }}-rc" | sed 's/[.]//g')
+          npm publish --ignore-scripts --access public  --tag dev
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

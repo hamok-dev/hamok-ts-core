@@ -38,6 +38,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
     private _storage: Storage<K, V>;
     private _comlink: StorageComlink<K, V>;
     private _ongoingSync?: Promise<void>;
+    private _actualLeaderId?: string;
 
     public constructor(
         config: ReplicatedStorageConfig,
@@ -45,7 +46,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         comlink: StorageComlink<K, V>
     ) {
         this.config = config;
-        this._standalone = true;
+        this._standalone = comlink.remoteEndpointIds.size < 1;
         this._storage = storage;
         this._comlink = comlink
             .onClearEntriesRequest(async request => {
@@ -56,10 +57,11 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                 }
             })
             .onClearEntriesNotification(async notification => {
-                logNotUsedAction(
-                    "onClearEntriesNotification", 
-                    notification
-                );
+                // logNotUsedAction(
+                //     "onClearEntriesNotification", 
+                //     notification
+                // );
+                // throw new Error(`Not implemented`);
             })
             .onGetEntriesRequest(async request => {
                 const foundEntries = await this._storage.getAll(request.keys);
@@ -142,65 +144,81 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                     notification,
                 );
             })
-            // .onRemoteEndpointJoined(remoteEndpointId => {
-                
-            // })
-            // .onRemoteEndpointDetached(remoteEndpointId => {
-
-            // })
+            .onRemoteEndpointJoined(() => {
+                // empty
+            })
+            .onRemoteEndpointDetached(() => {
+                if (this._comlink.remoteEndpointIds.size === 0 && this._actualLeaderId === undefined) {
+                    this._standalone = true;
+                }
+            })
             .onChangedLeaderId(async leaderId => {
+                this._actualLeaderId = leaderId;
                 if (leaderId === undefined) {
+                    if (this._comlink.remoteEndpointIds.size === 0) {
+                        this._standalone = true;
+                    }
                     return;
                 }
-                const wasAlone = this._standalone;
-                if (!wasAlone) return;
-                if (this._ongoingSync) {
-                    await this._ongoingSync;
-                    return;
-                }
-                this._ongoingSync = new Promise(resolve => {
-                    logger.info(`Storage ${this.id} is joining to the grid`);
-                    this._standalone = false;
-                    this._clearAndSetAllEntries().then(resolve)
-                });
-                this._ongoingSync.catch(err => {
-                    logger.warn(`onChangedLeaderId(): Error occurred while performing operation`, err);
-                }).finally(() => {
-                    this._ongoingSync = undefined;
-                });
+                // if the grid rejoins or joins it requests a storage sync
+                this._standalone = false;
+                // const wasAlone = this._standalone;
+                // if (!wasAlone) return;
+                // if (this._ongoingSync) {
+                //     await this._ongoingSync;
+                //     return;
+                // }
+                // this._ongoingSync = new Promise<void>(resolve => {
+                //     logger.info(`Storage ${this.id} is joining to the grid`);
+                //     this._standalone = false;
+                //     this._storage.keys()
+                //         .then(keys => this._storage.getAll(keys))
+                //         .then(entries => this.setAll(entries))
+                //         .then(() => resolve())
+                // });
+                // this._ongoingSync.catch(err => {
+                //     logger.warn(`onChangedLeaderId(): Error occurred while performing operation`, err);
+                // }).finally(() => {
+                //     this._ongoingSync = undefined;
+                // });
             })
             .onStorageSyncRequested(async promise => {
+                if (!this._actualLeaderId) {
+                    promise.reject(new Error(`Cannot perform a storage sync without a leader`));
+                    return;
+                }
                 if (this._ongoingSync) {
-                    await this._ongoingSync;
+                    this._ongoingSync.then(() => promise.resolve({
+                        success: true,
+                    })).catch(err => {
+                        promise.resolve({
+                            success: false,
+                            errors: [err]
+                        })
+                    });
                     return;
                 }
                 logger.info(`Storage ${this.id} is being synchronized`);
-                this._ongoingSync = this._clearAndSetAllEntries();
-                this._ongoingSync.then(() => {
-                    promise.resolve({
-                        success: true,
-                    })
-                }).catch(err => {
-                    logger.warn(`onChangedLeaderId(): Error occurred while performing operation`, err);
-                    promise.resolve({
-                        success: false,
-                        errors: [err]
-                    })
-                }).finally(() => {
-                    this._ongoingSync = undefined;
-                });
+                if (!this._ongoingSync) {
+                    this._ongoingSync = this._evictAndRestoreLeaderEntries().then(remainingEntries => {
+                        promise.resolve({
+                            success: true,
+                        });
+                        this._ongoingSync = undefined;
+                        if (0 < remainingEntries.size) {
+                            this.setAll(remainingEntries);
+                        }
+                    }).catch(err => {
+                        logger.warn(`onChangedLeaderId(): Error occurred while performing operation`, err);
+                        promise.resolve({
+                            success: false,
+                            errors: [err]
+                        });
+                        this._ongoingSync = undefined;
+                    });
+                }
             })
             ;
-    }
-
-    private _clearAndSetAllEntries(): Promise<void> {
-        return this._storage.keys()
-            .then(keys => this._storage.getAll(keys))
-            .then(entries => new Promise<void>(resolve => {
-                this._storage.clear()
-                    .then(() => this.setAll(entries))
-                    .then(() => resolve())
-            }));
     }
 
     public get id(): string {
@@ -227,7 +245,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         if (this._standalone) {
             return this._storage.clear();
         }
-        return this._comlink.requestClearEntries();
+        return this._comlink.requestClearEntries(Collections.setOf(this._comlink.localEndpointId));
     }
 
     public async get(key: K): Promise<V | undefined> {
@@ -254,7 +272,8 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitMap<K, V>(
             entries,
-            Math.min(this.config.maxKeys, this.config.maxValues)
+            Math.min(this.config.maxKeys, this.config.maxValues),
+            () => [entries]
         ).map(batchedEntries => this._comlink.requestUpdateEntries(
             batchedEntries,
             Collections.setOf(this._comlink.localEndpointId)
@@ -281,7 +300,8 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitMap<K, V>(
             entries,
-            Math.min(this.config.maxKeys, this.config.maxValues)
+            Math.min(this.config.maxKeys, this.config.maxValues),
+            () => [entries]
         ).map(batchedEntries => this._comlink.requestInsertEntries(
             batchedEntries,
             Collections.setOf(this._comlink.localEndpointId)
@@ -308,7 +328,8 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitSet<K>(
             keys,
-            Math.min(this.config.maxKeys, this.config.maxValues)
+            Math.min(this.config.maxKeys, this.config.maxValues),
+            () => [keys]
         ).map(batchedEntries => this._comlink.requestDeleteEntries(
             batchedEntries,
             Collections.setOf(this._comlink.localEndpointId)
@@ -334,7 +355,8 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         }
         const requests = Collections.splitSet<K>(
             keys,
-            Math.min(this.config.maxKeys, this.config.maxValues)
+            Math.min(this.config.maxKeys, this.config.maxValues),
+            () => [keys]
         ).map(batchedEntries => this._comlink.requestDeleteEntries(
             batchedEntries,
             Collections.setOf(this._comlink.localEndpointId)
@@ -371,5 +393,24 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
         for await (const entry of iterator) {
             yield entry;
         }
+    }
+
+    private async _evictAndRestoreLeaderEntries(): Promise<ReadonlyMap<K, V>> {
+        if (!this._actualLeaderId) {
+            throw new Error(`Cannot execute storage sync without leaderId`);
+        }
+        // evict all entries from local storage
+        const [localKeys, leaderKeys] = await Promise.all([
+            this._storage.keys(),
+            this._comlink.requestGetKeys(Collections.setOf(this._actualLeaderId))
+        ]);
+        // console.warn("_evictAndRestoreAllEntries localKeys:", localKeys, "leaderKeys: ", leaderKeys);
+        const leaderEntries = await this._comlink.requestGetEntries(leaderKeys, Collections.setOf(this._actualLeaderId));
+        const remainingKeys = new Set<K>(Array.from(localKeys).filter(key => !leaderKeys.has(key)));
+        const remainingEntries = await (0 < remainingKeys.size ? this._storage.getAll(remainingKeys) : Promise.resolve(new Map<K, V>()));
+        // console.warn("_evictAndRestoreAllEntries leaderEntries:", leaderEntries);
+        await this._storage.evictAll(leaderKeys);
+        await this._storage.restoreAll(leaderEntries);
+        return remainingEntries;
     }
 }

@@ -29,7 +29,7 @@ import {
     MessageDefaultProcessor,
 } from "@hamok-dev/common"
 import { GetSizeRequest, GetSizeResponse } from "@hamok-dev/common/lib/messagetypes/GetSize";
-import { EventEmitter } from "ws";
+import { EventEmitter } from "events";
 import { ResponseChunker } from "../messages/ResponseChunker";
 import { ResponseChunkerImpl } from "../messages/ResponseChunkerImpl";
 
