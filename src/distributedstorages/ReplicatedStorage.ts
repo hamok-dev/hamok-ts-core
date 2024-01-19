@@ -145,7 +145,7 @@ export class ReplicatedStorage<K, V> implements Storage<K, V> {
                 );
             })
             .onRemoteEndpointJoined(() => {
-                
+                // empty
             })
             .onRemoteEndpointDetached(() => {
                 if (this._comlink.remoteEndpointIds.size === 0 && this._actualLeaderId === undefined) {
