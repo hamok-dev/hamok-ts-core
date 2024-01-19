@@ -472,7 +472,9 @@ export class HamokGrid {
                 message.protocol = MessageProtocol.GRID_COMMUNICATION_PROTOCOL;
                 grid._send(message);
             }
-        }
+        }(
+            this.config.requestTimeoutInMs,
+        )
         return result;
     }
 

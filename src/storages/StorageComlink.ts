@@ -37,7 +37,6 @@ import { v4 as uuid } from "uuid";
 import { HamokGrid, StorageSyncResult } from "../HamokGrid";
 import { PendingResponse } from "../messages/PendingResponse";
 import { ResponseChunker } from "../messages/ResponseChunker";
-import { EventEmitter } from "ws";
 import { RemoteEndpointStateChangedListener } from "../raccoons/RemotePeers";
 import { CompletablePromise } from "../utils/CompletablePromise";
 import { OngoingRequestIds } from "../messages/OngoingRequestIds";

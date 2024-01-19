@@ -3,7 +3,6 @@ import {
     createLogger,
 } from "@hamok-dev/common"
 
-import { EventEmitter } from "ws";
 
 const logger = createLogger("GridTransport");
 

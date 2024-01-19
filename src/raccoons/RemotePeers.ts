@@ -1,7 +1,7 @@
 import { 
     createLogger 
 } from "@hamok-dev/common";
-import { EventEmitter } from "ws";
+import { EventEmitter } from "events";
 
 const logger = createLogger("RemotePeers");
 

@@ -10,8 +10,8 @@ import {
     StorageSyncResponse,
     SubmitMessageResponse,
 } from "@hamok-dev/common"
-import { EventEmitter } from "ws";
-import { CompletablePromise } from "./utils/CompletablePromise";
+import { EventEmitter } from "events";
+import { CompletablePromise, CompletablePromiseState } from "./utils/CompletablePromise";
 
 const logger = createLogger("GridTransport");
 
@@ -38,7 +38,9 @@ export abstract class GridDispatcher {
     private _emitter = new EventEmitter();
     private _receiver: MessageProcessor<void>;
 
-    public constructor() {
+    public constructor(
+        private _requestTimeoutInMs: number,
+    ) {
         this._receiver = this._createReceiver();
     }
 
@@ -71,6 +73,22 @@ export abstract class GridDispatcher {
     public async requestStorageSync(request: StorageSyncRequest): Promise<StorageSyncResponse> {
         const promise = new CompletablePromise<StorageSyncResponse>();
         const message = this._codec.encodeStorageSyncRequest(request);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        if (0 < this._requestTimeoutInMs) {
+            timer = setTimeout(() => {
+                if (promise.state !== CompletablePromiseState.PENDING) {
+                    return;
+                }
+                promise.reject(new Error(`Timeout for Storage Sync request. requestId: ${request.requestId}`));
+            }, this._requestTimeoutInMs);
+        }
+        promise.then(() => {
+            if (timer) {
+                clearTimeout(timer);
+            }
+        }).catch(() => {
+            this._storageSyncRequests.delete(request.requestId);
+        });
         this._storageSyncRequests.set(request.requestId, promise);
         this.send(message);
         return promise;
@@ -88,6 +106,22 @@ export abstract class GridDispatcher {
     public async requestSubmitMessage(request: SubmitMessageRequest): Promise<SubmitMessageResponse> {
         const promise = new CompletablePromise<SubmitMessageResponse>();
         const message = this._codec.encodeSubmitMessageRequest(request);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        if (0 < this._requestTimeoutInMs) {
+            timer = setTimeout(() => {
+                if (promise.state !== CompletablePromiseState.PENDING) {
+                    return;
+                }
+                promise.reject(new Error(`Timeout for Submit Message request. requestId: ${request.requestId}`));
+            }, this._requestTimeoutInMs);
+        }
+        promise.then(() => {
+            if (timer) {
+                clearTimeout(timer);
+            }
+        }).catch(() => {
+            this._submitRequests.delete(request.requestId);
+        });
         this._submitRequests.set(request.requestId, promise);
         this.send(message);
         return promise;

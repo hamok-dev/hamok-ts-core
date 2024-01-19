@@ -1,4 +1,4 @@
-import { EventEmitter } from "ws";
+import { EventEmitter } from "events";
 import { v4 as uuid } from "uuid";
 import { createLogger } from "@hamok-dev/common";
 
